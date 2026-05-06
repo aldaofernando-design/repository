@@ -11,14 +11,28 @@ interface SiteCardProps {
     lat: number;
     lng: number;
   };
+  status?: string;
 }
 
-export const SiteCard: React.FC<SiteCardProps> = ({ site }) => {
+export const SiteCard: React.FC<SiteCardProps> = ({ site, status }) => {
+  const getStatusColor = (st?: string) => {
+    if (st === 'Ejecutado') return colors.success;
+    if (st === 'Planificado') return colors.warning;
+    return colors.textSecondary; // Sin asignar
+  };
+
   return (
     <View style={styles.card}>
       <View style={styles.header}>
-        <Text style={styles.code}>{site.code}</Text>
-        <Text style={styles.name}>{site.name}</Text>
+        <View style={styles.titleRow}>
+          <Text style={styles.code}>{site.code}</Text>
+          <Text style={styles.name}>{site.name}</Text>
+        </View>
+        <View style={[styles.badge, { backgroundColor: getStatusColor(status) + '20' }]}>
+          <Text style={[styles.badgeText, { color: getStatusColor(status) }]}>
+            {status || 'Sin Asignar'}
+          </Text>
+        </View>
       </View>
       <View style={styles.details}>
         <Text style={styles.detailText}>{site.address}, {site.commune}</Text>
@@ -49,6 +63,11 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.border,
     paddingBottom: 8,
   },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
   code: {
     fontSize: 14,
     fontWeight: 'bold',
@@ -57,11 +76,22 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 6,
+    marginRight: 8,
   },
   name: {
     fontSize: 16,
     fontWeight: '600',
     color: colors.text,
+    flexShrink: 1,
+  },
+  badge: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  badgeText: {
+    fontSize: 12,
+    fontWeight: 'bold',
   },
   details: {
     marginTop: 4,

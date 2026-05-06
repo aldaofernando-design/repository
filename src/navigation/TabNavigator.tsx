@@ -1,11 +1,13 @@
-import React from 'react';
+import React, { useContext } from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { UsuariosScreen } from '../screens/UsuariosScreen';
 import { SitiosScreen } from '../screens/SitiosScreen';
 import { PlanificacionScreen } from '../screens/PlanificacionScreen';
 import { ActividadScreen } from '../screens/ActividadScreen';
 import { AvanceScreen } from '../screens/AvanceScreen';
+import { CalendarioScreen } from '../screens/CalendarioScreen';
 import { colors } from '../theme/colors';
+import { AppContext } from '../context/AppContext';
 
 // En Expo Go, Ionicons generalmente está disponible
 import { Ionicons } from '@expo/vector-icons';
@@ -13,6 +15,9 @@ import { Ionicons } from '@expo/vector-icons';
 const Tab = createBottomTabNavigator();
 
 export const TabNavigator = () => {
+  const context = useContext(AppContext);
+  const isTrabajador = context?.currentUser.role === 'Trabajador';
+
   return (
     <Tab.Navigator
       screenOptions={({ route }) => ({
@@ -40,17 +45,24 @@ export const TabNavigator = () => {
             iconName = focused ? 'clipboard' : 'clipboard-outline';
           } else if (route.name === 'Avance') {
             iconName = focused ? 'bar-chart' : 'bar-chart-outline';
+          } else if (route.name === 'Calendario') {
+            iconName = focused ? 'calendar-sharp' : 'calendar-outline';
           }
 
           return <Ionicons name={iconName} size={size} color={color} />;
         },
       })}
     >
-      <Tab.Screen name="Usuarios" component={UsuariosScreen} />
-      <Tab.Screen name="Sitios" component={SitiosScreen} />
-      <Tab.Screen name="Planificacion" component={PlanificacionScreen} options={{ title: 'Planif.' }} />
+      {!isTrabajador && <Tab.Screen name="Usuarios" component={UsuariosScreen} />}
+      {!isTrabajador && <Tab.Screen name="Sitios" component={SitiosScreen} />}
+      
+      {/* Trabajador: ve Calendario, Actividad */}
+      {isTrabajador && <Tab.Screen name="Calendario" component={CalendarioScreen} />}
       <Tab.Screen name="Actividad" component={ActividadScreen} />
-      <Tab.Screen name="Avance" component={AvanceScreen} />
+      
+      {/* Administrador/Coordinador: ven Planificación y Avance en vez de Calendario */}
+      {!isTrabajador && <Tab.Screen name="Planificacion" component={PlanificacionScreen} options={{ title: 'Planif.' }} />}
+      {!isTrabajador && <Tab.Screen name="Avance" component={AvanceScreen} />}
     </Tab.Navigator>
   );
 };

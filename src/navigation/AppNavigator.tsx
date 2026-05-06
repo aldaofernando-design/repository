@@ -3,6 +3,7 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { TabNavigator } from './TabNavigator';
 import { DetalleActividadScreen } from '../screens/DetalleActividadScreen';
+import { UsuarioFormScreen } from '../screens/UsuarioFormScreen';
 
 const Stack = createNativeStackNavigator();
 
@@ -12,6 +13,7 @@ export const AppNavigator = () => {
       <Stack.Navigator screenOptions={{ headerShown: false }}>
         <Stack.Screen name="MainTabs" component={TabNavigator} />
         <Stack.Screen name="DetalleActividad" component={DetalleActividadScreen} />
+        <Stack.Screen name="UsuarioForm" component={UsuarioFormScreen} />
       </Stack.Navigator>
     </NavigationContainer>
   );

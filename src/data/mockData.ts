@@ -67,14 +67,14 @@ export const sites = [
   },
 ];
 
-// Simulamos que el s1 está planificado para Carlos, y el s2 para Ana.
+// Simulamos que el s1 está planificado para hoy, y el s2 en ejecución.
 export const plannings = [
   {
     id: 'p1',
     siteId: 's1',
     workerId: 'u3',
-    date: '2026-05-01',
-    status: 'Planificado', // Puede ser Planificado o Ejecutado
+    date: '2026-05-04',
+    status: 'Planificado', // Puede ser Planificado o Ejecutado o En ejecución
     details: {
       spliceCapacity: '',
       photos: []
@@ -84,8 +84,8 @@ export const plannings = [
     id: 'p2',
     siteId: 's2',
     workerId: 'u4',
-    date: '2026-05-02',
-    status: 'Planificado',
+    date: '2026-05-04',
+    status: 'En ejecución',
     details: {
       spliceCapacity: '',
       photos: []

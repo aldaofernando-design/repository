@@ -1,60 +1,129 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, SafeAreaView, TouchableOpacity, ScrollView } from 'react-native';
+import React, { useState, useContext } from 'react';
+import { View, Text, StyleSheet, SafeAreaView, TouchableOpacity, ScrollView, Alert, Platform } from 'react-native';
+import DateTimePicker from '@react-native-community/datetimepicker';
+import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../theme/colors';
-import { sites, users } from '../data/mockData';
+import { AppContext } from '../context/AppContext';
+import { SelectDropdown } from '../components/SelectDropdown';
 
-export const PlanificacionScreen = () => {
+export const PlanificacionScreen = ({ navigation }: any) => {
+  const context = useContext(AppContext);
   const [selectedSite, setSelectedSite] = useState<string | null>(null);
   const [selectedWorker, setSelectedWorker] = useState<string | null>(null);
-  const workers = users.filter(u => u.role === 'Trabajador');
+  
+  const [date, setDate] = useState(new Date());
+  const [showDatePicker, setShowDatePicker] = useState(false);
+
+  // 1. Filter Sites (Status !== Ejecutado)
+  const siteStatusMap = context?.plannings.reduce((acc, plan) => {
+    acc[plan.siteId] = plan.status;
+    return acc;
+  }, {} as Record<string, string>) || {};
+
+  const availableSites = (context?.sites || []).filter(site => {
+    const status = siteStatusMap[site.id] || 'Sin Asignar';
+    return status !== 'Ejecutado';
+  });
+
+  const siteOptions = availableSites.map(s => ({
+    id: s.id,
+    label: `${s.code} - ${s.name}`,
+    subLabel: `${s.address}, ${s.commune}`,
+  }));
+
+  // 2. Filter Workers
+  const workers = (context?.users || []).filter(u => u.role === 'Trabajador');
+  const workerOptions = workers.map(w => ({
+    id: w.id,
+    label: w.name,
+    subLabel: `${w.company} (${w.phone})`,
+  }));
+
+  const onChangeDate = (event: any, selectedDate?: Date) => {
+    setShowDatePicker(Platform.OS === 'ios');
+    if (selectedDate) {
+      setDate(selectedDate);
+    }
+  };
+
+  const handlePlanificar = () => {
+    if (!selectedSite || !selectedWorker) {
+      Alert.alert('Faltan datos', 'Debes seleccionar un sitio y un trabajador.');
+      return;
+    }
+
+    const dateString = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+
+    context?.addPlanning({
+      siteId: selectedSite,
+      workerId: selectedWorker,
+      date: dateString,
+      status: 'Planificado'
+    });
+
+    Alert.alert('Éxito', 'Actividad planificada correctamente', [
+      { text: 'OK', onPress: () => {
+        setSelectedSite(null);
+        setSelectedWorker(null);
+        setDate(new Date());
+      }}
+    ]);
+  };
 
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.scroll}>
         <Text style={styles.title}>Nueva Planificación</Text>
         
-        <View style={styles.section}>
-          <Text style={styles.label}>1. Seleccionar Sitio</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.hScroll}>
-            {sites.map(site => (
-              <TouchableOpacity 
-                key={site.id} 
-                style={[styles.chip, selectedSite === site.id && styles.chipSelected]}
-                onPress={() => setSelectedSite(site.id)}
-              >
-                <Text style={[styles.chipText, selectedSite === site.id && styles.chipTextSelected]}>
-                  {site.code}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
-        </View>
+        <SelectDropdown 
+          label="1. Seleccionar Sitio"
+          value={selectedSite}
+          options={siteOptions}
+          onSelect={setSelectedSite}
+          placeholder="Toca para elegir un sitio..."
+          searchable
+        />
 
-        <View style={styles.section}>
-          <Text style={styles.label}>2. Asignar Trabajador</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.hScroll}>
-            {workers.map(worker => (
-              <TouchableOpacity 
-                key={worker.id} 
-                style={[styles.chip, selectedWorker === worker.id && styles.chipSelected]}
-                onPress={() => setSelectedWorker(worker.id)}
-              >
-                <Text style={[styles.chipText, selectedWorker === worker.id && styles.chipTextSelected]}>
-                  {worker.name}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
-        </View>
+        <SelectDropdown 
+          label="2. Asignar Trabajador"
+          value={selectedWorker}
+          options={workerOptions}
+          onSelect={setSelectedWorker}
+          placeholder="Toca para elegir un trabajador..."
+        />
 
         <View style={styles.section}>
           <Text style={styles.label}>3. Fecha de Planificación</Text>
-          <View style={styles.dateBox}>
-             <Text style={styles.dateText}>05 Mayo 2026</Text>
-          </View>
+          {Platform.OS === 'ios' ? (
+            <View style={styles.iosDateContainer}>
+              <DateTimePicker
+                value={date}
+                mode="date"
+                display="default"
+                minimumDate={new Date()}
+                onChange={onChangeDate}
+              />
+            </View>
+          ) : (
+            <>
+              <TouchableOpacity style={styles.dateBox} onPress={() => setShowDatePicker(true)}>
+                <Ionicons name="calendar-outline" size={20} color={colors.textSecondary} />
+                <Text style={styles.dateText}>{date.toLocaleDateString()}</Text>
+              </TouchableOpacity>
+              {showDatePicker && (
+                <DateTimePicker
+                  value={date}
+                  mode="date"
+                  display="default"
+                  minimumDate={new Date()}
+                  onChange={onChangeDate}
+                />
+              )}
+            </>
+          )}
         </View>
 
-        <TouchableOpacity style={styles.submitBtn}>
+        <TouchableOpacity style={styles.submitBtn} onPress={handlePlanificar}>
           <Text style={styles.submitBtnText}>Planificar Actividad</Text>
         </TouchableOpacity>
       </ScrollView>
@@ -77,36 +146,13 @@ const styles = StyleSheet.create({
     marginBottom: 24,
   },
   section: {
-    marginBottom: 24,
+    marginBottom: 20,
   },
   label: {
     fontSize: 16,
     fontWeight: '600',
     color: colors.textSecondary,
-    marginBottom: 12,
-  },
-  hScroll: {
-    flexDirection: 'row',
-  },
-  chip: {
-    backgroundColor: colors.surface,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 20,
-    marginRight: 12,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  chipSelected: {
-    backgroundColor: colors.primary,
-    borderColor: colors.primary,
-  },
-  chipText: {
-    color: colors.text,
-    fontWeight: '500',
-  },
-  chipTextSelected: {
-    color: colors.surface,
+    marginBottom: 8,
   },
   dateBox: {
     backgroundColor: colors.surface,
@@ -114,19 +160,29 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     borderWidth: 1,
     borderColor: colors.border,
+    flexDirection: 'row',
     alignItems: 'center',
+    gap: 8,
   },
   dateText: {
     fontSize: 16,
     color: colors.text,
     fontWeight: '500',
   },
+  iosDateContainer: {
+    backgroundColor: colors.surface,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: 8,
+    alignItems: 'flex-start',
+  },
   submitBtn: {
     backgroundColor: colors.success,
     padding: 16,
     borderRadius: 8,
     alignItems: 'center',
-    marginTop: 16,
+    marginTop: 24,
   },
   submitBtnText: {
     color: colors.surface,

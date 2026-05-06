@@ -1,9 +1,10 @@
 import React from 'react';
-import { View, Text, StyleSheet, Image } from 'react-native';
+import { View, Text, StyleSheet, Image, TouchableOpacity } from 'react-native';
 import { colors } from '../theme/colors';
 
 interface UserCardProps {
   user: {
+    id: string;
     name: string;
     email: string;
     phone: string;
@@ -11,11 +12,12 @@ interface UserCardProps {
     role: string;
     photo: string;
   };
+  onEdit?: () => void;
 }
 
-export const UserCard: React.FC<UserCardProps> = ({ user }) => {
+export const UserCard: React.FC<UserCardProps> = ({ user, onEdit }) => {
   return (
-    <View style={styles.card}>
+    <TouchableOpacity style={styles.card} onPress={onEdit} disabled={!onEdit}>
       <Image source={{ uri: user.photo }} style={styles.photo} />
       <View style={styles.info}>
         <Text style={styles.name}>{user.name}</Text>
@@ -23,7 +25,12 @@ export const UserCard: React.FC<UserCardProps> = ({ user }) => {
         <Text style={styles.detail}>{user.email}</Text>
         <Text style={styles.detail}>{user.phone}</Text>
       </View>
-    </View>
+      {onEdit && (
+        <View style={styles.editBtn}>
+          <Text style={styles.editBtnText}>✎</Text>
+        </View>
+      )}
+    </TouchableOpacity>
   );
 };
 
@@ -67,4 +74,11 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     marginTop: 2,
   },
+  editBtn: {
+    padding: 8,
+  },
+  editBtnText: {
+    fontSize: 20,
+    color: colors.primaryLight,
+  }
 });

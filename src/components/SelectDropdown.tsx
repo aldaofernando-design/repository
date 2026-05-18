@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, Modal, TouchableOpacity, FlatList, TextInput, SafeAreaView } from 'react-native';
+import { View, Text, StyleSheet, Modal, TouchableOpacity, ScrollView, TextInput } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../theme/colors';
 
@@ -16,10 +17,11 @@ interface SelectDropdownProps {
   onSelect: (id: string) => void;
   placeholder?: string;
   searchable?: boolean;
+  disabled?: boolean;
 }
 
 export const SelectDropdown: React.FC<SelectDropdownProps> = ({ 
-  label, value, options, onSelect, placeholder = 'Seleccionar...', searchable = false 
+  label, value, options, onSelect, placeholder = 'Seleccionar...', searchable = false, disabled = false 
 }) => {
   const [visible, setVisible] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -43,11 +45,15 @@ export const SelectDropdown: React.FC<SelectDropdownProps> = ({
     <View style={styles.container}>
       <Text style={styles.label}>{label}</Text>
       
-      <TouchableOpacity style={styles.selector} onPress={() => setVisible(true)}>
+      <TouchableOpacity 
+        style={[styles.selector, disabled && styles.disabledSelector]} 
+        onPress={() => !disabled && setVisible(true)}
+        activeOpacity={disabled ? 1 : 0.7}
+      >
         <Text style={[styles.selectorText, !selectedOption && styles.placeholder]}>
           {selectedOption ? selectedOption.label : placeholder}
         </Text>
-        <Ionicons name="chevron-down" size={20} color={colors.textSecondary} />
+        <Ionicons name="chevron-down" size={20} color={disabled ? 'transparent' : colors.textSecondary} />
       </TouchableOpacity>
 
       <Modal visible={visible} animationType="slide" presentationStyle="pageSheet">
@@ -72,23 +78,23 @@ export const SelectDropdown: React.FC<SelectDropdownProps> = ({
             </View>
           )}
 
-          <FlatList
-            data={filteredOptions}
-            keyExtractor={item => item.id}
-            contentContainerStyle={styles.listContainer}
-            renderItem={({ item }) => (
-              <TouchableOpacity style={styles.optionItem} onPress={() => handleSelect(item.id)}>
-                <View>
-                  <Text style={[styles.optionLabel, value === item.id && styles.optionSelectedText]}>
-                    {item.label}
-                  </Text>
-                  {item.subLabel && <Text style={styles.optionSubLabel}>{item.subLabel}</Text>}
-                </View>
-                {value === item.id && <Ionicons name="checkmark" size={24} color={colors.primary} />}
-              </TouchableOpacity>
+          <ScrollView contentContainerStyle={styles.listContainer}>
+            {filteredOptions.length > 0 ? (
+              filteredOptions.map(item => (
+                <TouchableOpacity key={item.id} style={styles.optionItem} onPress={() => handleSelect(item.id)}>
+                  <View>
+                    <Text style={[styles.optionLabel, value === item.id && styles.optionSelectedText]}>
+                      {item.label}
+                    </Text>
+                    {item.subLabel && <Text style={styles.optionSubLabel}>{item.subLabel}</Text>}
+                  </View>
+                  {value === item.id && <Ionicons name="checkmark" size={24} color={colors.primary} />}
+                </TouchableOpacity>
+              ))
+            ) : (
+              <Text style={styles.emptyText}>No hay resultados.</Text>
             )}
-            ListEmptyComponent={<Text style={styles.emptyText}>No hay resultados.</Text>}
-          />
+          </ScrollView>
         </SafeAreaView>
       </Modal>
     </View>
@@ -114,6 +120,11 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     borderRadius: 8,
     padding: 16,
+  },
+  disabledSelector: {
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderColor: 'rgba(255, 255, 255, 0.15)',
+    opacity: 1,
   },
   selectorText: {
     fontSize: 16,

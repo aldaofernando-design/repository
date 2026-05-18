@@ -11,6 +11,7 @@ export interface User {
   company: string;
   role: string;
   photo: string;
+  status: 'Activo' | 'Inactivo';
 }
 
 export interface Site {
@@ -21,6 +22,11 @@ export interface Site {
   commune: string;
   lat: number;
   lng: number;
+  region?: number;
+  apagado3G?: string;
+  apagadoBAFI?: string;
+  configurarRETU?: string;
+  estadoExcel?: string;
 }
 
 export interface Planning {
@@ -79,6 +85,7 @@ interface AppContextType {
   setCurrentUserRole: (role: UserRole) => void;
   addPlanning: (planning: Omit<Planning, 'id' | 'details'>) => void;
   updatePlanning: (id: string, updatedData: Partial<Planning>) => void;
+  updateSite: (id: string, updatedData: Partial<Site>) => void;
 }
 
 export const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -88,8 +95,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [sites, setSites] = useState<Site[]>(initialSites);
   const [plannings, setPlannings] = useState<Planning[]>(initialPlannings);
   
-  // Simulamos que el usuario actual es María González (Coordinador)
-  const [currentUser, setCurrentUser] = useState<User>(initialUsers[1]);
+  // Simulamos que el usuario actual es Carlos Silva (Trabajador)
+  const [currentUser, setCurrentUser] = useState<User>(initialUsers[2]);
 
   const addUser = (userData: Omit<User, 'id'>) => {
     const newUser = {
@@ -101,7 +108,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const updateUser = (id: string, updatedUser: Partial<User>) => {
-    setUsers(users.map(u => (u.id === id ? { ...u, ...updatedUser } : u)));
+    setUsers(prev => prev.map(u => (u.id === id ? { ...u, ...updatedUser } : u)));
   };
 
   const setCurrentUserRole = (role: UserRole) => {
@@ -121,11 +128,15 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const updatePlanning = (id: string, updatedData: Partial<Planning>) => {
-    setPlannings(plannings.map(p => (p.id === id ? { ...p, ...updatedData } : p)));
+    setPlannings(prev => prev.map(p => (p.id === id ? { ...p, ...updatedData } : p)));
+  };
+
+  const updateSite = (id: string, updatedData: Partial<Site>) => {
+    setSites(prev => prev.map(s => (s.id === id ? { ...s, ...updatedData } : s)));
   };
 
   return (
-    <AppContext.Provider value={{ users, sites, plannings, currentUser, addUser, updateUser, setCurrentUserRole, addPlanning, updatePlanning }}>
+    <AppContext.Provider value={{ users, sites, plannings, currentUser, addUser, updateUser, setCurrentUserRole, addPlanning, updatePlanning, updateSite }}>
       {children}
     </AppContext.Provider>
   );

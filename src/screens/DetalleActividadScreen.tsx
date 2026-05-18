@@ -1,5 +1,6 @@
 import React, { useState, useContext, useRef, useEffect } from 'react';
-import { View, Text, StyleSheet, SafeAreaView, TouchableOpacity, TextInput, ScrollView, Linking, Alert, Image, Dimensions, Modal, StatusBar, LayoutAnimation, Platform, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, TextInput, ScrollView, Linking, Alert, Image, Dimensions, Modal, StatusBar, LayoutAnimation, Platform, ActivityIndicator } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
@@ -7,12 +8,13 @@ import ViewShot, { captureRef } from 'react-native-view-shot';
 import { colors } from '../theme/colors';
 import { AppContext } from '../context/AppContext';
 import { SelectDropdown } from '../components/SelectDropdown';
+import { getElapsedTime } from '../services/timeUtils';
 const LOGO_F1 = require('../assets/logo_f1plus.png');
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 
 export const DetalleActividadScreen = ({ route, navigation }: any) => {
-  const { planningId } = route.params || {};
+  const { planningId, isPreview } = route.params || {};
   const context = useContext(AppContext);
   
   const planning = context?.plannings.find(p => p.id === planningId);
@@ -32,7 +34,29 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
   const [fotoSectorMedidor, setFotoSectorMedidor] = useState(dg?.fotoSectorMedidor || '');
   const [numeroMedidor, setNumeroMedidor] = useState(dg?.numeroMedidor || '');
   const [lecturaConsumo, setLecturaConsumo] = useState(dg?.lecturaConsumo || '');
+  const [ampereEmpalme, setAmpereEmpalme] = useState<string[]>(dg?.ampereEmpalme || ['', '', '']);
   
+  // Estado para el modal de Ampere
+  const [showAmpereModal, setShowAmpereModal] = useState(false);
+  const [tempAmpere, setTempAmpere] = useState('');
+  const [activeAmpereTarget, setActiveAmpereTarget] = useState<string | null>(null);
+  const [activeAmpereIndex, setActiveAmpereIndex] = useState<number | null>(null);
+  const [activeFolder, setActiveFolder] = useState<string | null>(null);
+  const [elapsedTime, setElapsedTime] = useState('');
+  const isFinalizingRef = useRef(false);
+  const isReadOnly = planning?.status === 'Ejecutado' || isPreview;
+
+  // Actualizar el tiempo cada minuto
+  useEffect(() => {
+    if (planning?.status === 'En ejecución' && planning.startTime) {
+      setElapsedTime(getElapsedTime(planning.startTime));
+      const interval = setInterval(() => {
+        setElapsedTime(getElapsedTime(planning.startTime));
+      }, 60000);
+      return () => clearInterval(interval);
+    }
+  }, [planning?.status, planning?.startTime]);
+
   // Nuevas fotos obligatorias
   const [fotoEstructura, setFotoEstructura] = useState(dg?.fotoEstructura || '');
   const [fotoFueraContenedor, setFotoFueraContenedor] = useState(dg?.fotoFueraContenedor || '');
@@ -54,11 +78,36 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
   const [seRetirara3G, setSeRetirara3G] = useState(apagado?.seRetirara3G || '');
   const [fotoRRUEncendido, setFotoRRUEncendido] = useState(apagado?.fotoRRUEncendido || '');
   const [fotoRRUApagado, setFotoRRUApagado] = useState(apagado?.fotoRRUApagado || '');
+  const [ampere3GEncendido, setAmpere3GEncendido] = useState(apagado?.ampere3GEncendido || '');
+  const [justificacionNoApagado, setJustificacionNoApagado] = useState(apagado?.justificacionNoApagado || '');
 
   // Refs estables para guardar sin crear dependencias reactivas
   const planningIdRef = useRef(planning?.id);
   const observacionesRef = useRef(observaciones);
   const fotosRef = useRef(fotos);
+
+  useEffect(() => {
+    // Si viene del Calendario como vista previa (isPreview), no verificamos fechas ni la iniciamos.
+    if (!isPreview && planning && planning.status !== 'En ejecución' && planning.status !== 'Ejecutado') {
+      const now = new Date();
+      const todayString = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      
+      if (planning.date !== todayString) {
+        Alert.alert(
+          'Acción no permitida',
+          `Esta actividad está planificada para el ${planning.date}. Solo puedes iniciar actividades programadas para el día de hoy.`,
+          [{ text: 'Entendido', onPress: () => navigation.goBack() }]
+        );
+        return;
+      }
+
+      context?.updatePlanning(planning.id, {
+        status: 'En ejecución',
+        startTime: now.toISOString(),
+      });
+    }
+  }, [planningId, isPreview]);
+
   const contextRef = useRef(context);
 
   // Refs Datos Generales
@@ -90,6 +139,8 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
   const seRetirara3GRef = useRef(seRetirara3G);
   const fotoRRUEncendidoRef = useRef(fotoRRUEncendido);
   const fotoRRUApagadoRef = useRef(fotoRRUApagado);
+  const ampereEmpalmeRef = useRef(ampereEmpalme);
+  const ampere3GEncendidoRef = useRef(ampere3GEncendido);
 
   // Mantener refs sincronizados
   observacionesRef.current = observaciones;
@@ -114,6 +165,13 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
   seApagara3GRef.current = seApagara3G;
   estadoRRURef.current = estadoRRU;
   seApagaraRRURef.current = seApagaraRRU;
+
+  const getProgressColor = (pct: number) => {
+    if (pct === 100) return colors.success;
+    if (pct > 70) return colors.primary;
+    if (pct > 30) return '#FF9500'; // Orange
+    return colors.danger; // Red
+  };
   
   fotoEquipo3GEncendidoRef.current = fotoEquipo3GEncendido;
   fotoBreaker3GEncendidoRef.current = fotoBreaker3GEncendido;
@@ -123,6 +181,8 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
   seRetirara3GRef.current = seRetirara3G;
   fotoRRUEncendidoRef.current = fotoRRUEncendido;
   fotoRRUApagadoRef.current = fotoRRUApagado;
+  ampereEmpalmeRef.current = ampereEmpalme;
+  ampere3GEncendidoRef.current = ampere3GEncendido;
   
   // Estado temporal para procesar la imagen pendiente
   const [pendingUri, setPendingUri] = useState<string | null>(null);
@@ -147,7 +207,7 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
   // Auto-guardar al salir de la pantalla usando el listener de navegación (estable, sin loops)
   useEffect(() => {
     const unsubscribe = navigation.addListener('beforeRemove', () => {
-      if (planningIdRef.current) {
+      if (planningIdRef.current && !isFinalizingRef.current) {
         contextRef.current?.updatePlanning(planningIdRef.current, {
           hallazgos: {
             observaciones: observacionesRef.current,
@@ -167,6 +227,7 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
             fotoFueraContenedor: fotoFueraContenedorRef.current,
             fotosGeneralesSitio: fotosGeneralesSitioRef.current,
             fotosInteriorContenedor: fotosInteriorContenedorRef.current,
+            ampereEmpalme: ampereEmpalmeRef.current,
           },
           apagado3G: {
             estado3G: estado3GRef.current,
@@ -181,7 +242,8 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
             seRetirara3G: seRetirara3GRef.current,
             fotoRRUEncendido: fotoRRUEncendidoRef.current,
             fotoRRUApagado: fotoRRUApagadoRef.current,
-          }
+            ampere3GEncendido: ampere3GEncendidoRef.current,
+          },
         });
       }
     });
@@ -340,7 +402,8 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
     }
   };
 
-  const handlePickImage = (target: 'hallazgos' | 'fotosEmpalme' | 'fotoMedidor' | 'fotoSectorMedidor', index: number | null = null) => {
+  const handlePickImage = (target: string, index: number | null = null) => {
+    if (isReadOnly) return;
     photoTargetRef.current = target;
     pendingIndexRef.current = index;
     
@@ -403,6 +466,11 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
                 if (index !== null) newFotos[index] = watermarkedUri;
                 return newFotos;
               });
+              // Abrir modal de ampere
+              setActiveAmpereTarget(null);
+              setActiveAmpereIndex(index);
+              setTempAmpere(ampereEmpalmeRef.current[index || 0] || '');
+              setShowAmpereModal(true);
             } else if (target === 'fotoMedidor') {
               setFotoMedidor(watermarkedUri);
             } else if (target === 'fotoSectorMedidor') {
@@ -449,6 +517,10 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
               if (index !== null) newFotos[index] = asset.uri;
               return newFotos;
             });
+            // Abrir modal de ampere (fallback)
+            setActiveAmpereIndex(index);
+            setTempAmpere(ampereEmpalmeRef.current[index || 0] || '');
+            setShowAmpereModal(true);
           } else if (target === 'fotoMedidor') {
             setFotoMedidor(asset.uri);
           } else if (target === 'fotoSectorMedidor') {
@@ -489,7 +561,7 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
           setIsProcessing(false);
           pendingIndexRef.current = null;
         }
-      }, 600);
+      }, 1000);
     }
   };
 
@@ -508,6 +580,7 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
   };
 
   const removeFoto = (index: number) => {
+    if (isReadOnly) return;
     Alert.alert(
       'Eliminar Foto',
       '¿Estás seguro de que deseas eliminar esta foto? Esta acción no se puede deshacer.',
@@ -519,6 +592,7 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
   };
 
   const removePhoto = (field: string, index: number | null = null) => {
+    if (isReadOnly) return;
     Alert.alert(
       'Eliminar Foto',
       '¿Estás seguro de que deseas eliminar esta foto?',
@@ -595,12 +669,168 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
     }
   };
 
+  const handleFinalize = () => {
+    if (planning && site) {
+      const datosProgress = calculateDatosProgress();
+      const apagadoProgress = calculateApagadoProgress();
+
+      if (datosProgress < 100 || apagadoProgress < 100) {
+        Alert.alert(
+          'Tareas pendientes',
+          `Para finalizar la actividad debes completar el 100% de las tareas obligatorias.\n\nDatos Generales: ${datosProgress}%\nApagado 3G/RRU: ${apagadoProgress}%`,
+          [{ text: 'Entendido' }]
+        );
+        return;
+      }
+      
+      Alert.alert(
+        'Finalizar Actividad',
+        '¿Estás seguro de que deseas finalizar esta actividad? Se registrará la fecha y hora actual.',
+        [
+          { text: 'Cancelar', style: 'cancel' },
+          { 
+            text: 'Finalizar', 
+            onPress: () => {
+              isFinalizingRef.current = true;
+              const now = new Date().toISOString();
+              context?.updatePlanning(planning.id, {
+                status: 'Ejecutado',
+                endTime: now,
+                hallazgos: {
+                  observaciones: observaciones,
+                  fotos: fotos,
+                },
+                datosGenerales: {
+                  tipoEstructura,
+                  tipoContenedor,
+                  tipoEmpalme,
+                  fotosEmpalme,
+                  capacidadProteccion,
+                  fotoMedidor,
+                  fotoSectorMedidor,
+                  numeroMedidor,
+                  lecturaConsumo,
+                  fotoEstructura,
+                  fotoFueraContenedor,
+                  fotosGeneralesSitio,
+                  fotosInteriorContenedor,
+                  ampereEmpalme,
+                },
+                apagado3G: {
+                  estado3G,
+                  seApagara3G,
+                  estadoRRU,
+                  seApagaraRRU,
+                  fotoEquipo3GEncendido,
+                  fotoBreaker3GEncendido,
+                  fotoBreaker3GApagado,
+                  fotoEquipo3GApagado,
+                  fotoEspacioRetirado,
+                  seRetirara3G,
+                  fotoRRUEncendido,
+                  fotoRRUApagado,
+                  ampere3GEncendido,
+                }
+              });
+              context?.updateSite(site.id, {
+                estadoExcel: 'Ejecutado'
+              });
+              navigation.goBack();
+            } 
+          }
+        ]
+      );
+    }
+  };
+
+  const handleReopen = () => {
+    if (!planning || !site) return;
+    Alert.alert(
+      "Reabrir Actividad",
+      "¿Estás seguro de que deseas reabrir esta actividad? El sitio volverá a estar 'En ejecución'.",
+      [
+        { text: "Cancelar", style: "cancel" },
+        { 
+          text: "Reabrir", 
+          onPress: () => {
+            context?.updatePlanning(planning.id, {
+              status: 'En ejecución',
+              endTime: undefined
+            });
+            context?.updateSite(site.id, {
+              estadoExcel: 'En ejecución'
+            });
+            Alert.alert("Éxito", "La actividad ha sido reabierta.");
+          } 
+        }
+      ]
+    );
+  };
+
+  const calculateDatosProgress = () => {
+    const totalFields = tipoEmpalme === 'Trifásico' ? 17 : 15;
+    let completedFields = 0;
+    if (tipoEstructura) completedFields++;
+    if (fotoEstructura) completedFields++;
+    if (tipoContenedor) completedFields++;
+    if (fotoFueraContenedor) completedFields++;
+    if (fotosGeneralesSitio[0]) completedFields++;
+    if (fotosGeneralesSitio[1]) completedFields++;
+    if (fotosInteriorContenedor[0]) completedFields++;
+    if (fotosInteriorContenedor[1]) completedFields++;
+    if (tipoEmpalme) completedFields++;
+    if (capacidadProteccion) completedFields++;
+    if (fotoMedidor) completedFields++;
+    if (fotoSectorMedidor) completedFields++;
+    if (numeroMedidor) completedFields++;
+    if (lecturaConsumo) completedFields++;
+    if (tipoEmpalme === 'Monofásico') { if (fotosEmpalme[0]) completedFields++; }
+    else if (tipoEmpalme === 'Trifásico') {
+      if (fotosEmpalme[0]) completedFields++;
+      if (fotosEmpalme[1]) completedFields++;
+      if (fotosEmpalme[2]) completedFields++;
+    }
+    return Math.round((completedFields / totalFields) * 100);
+  };
+
+  const calculateApagadoProgress = () => {
+    const is3GCompleted = (() => {
+      if (estado3G === 'Encendido') {
+        if (!fotoEquipo3GEncendido || !fotoBreaker3GEncendido || !seApagara3G) return false;
+        if (seApagara3G === 'Si' && (!fotoBreaker3GApagado || !fotoEquipo3GApagado || !fotoEspacioRetirado)) return false;
+        return true;
+      }
+      if (estado3G === 'Apagado') {
+        if (!seRetirara3G) return false;
+        if (seRetirara3G === 'Si' && (!fotoBreaker3GApagado || !fotoEquipo3GApagado || !fotoEspacioRetirado)) return false;
+        return true;
+      }
+      if (estado3G === 'N/A') return !!fotoEspacioRetirado;
+      return false;
+    })();
+    const isRRUCompleted = (() => {
+      if (estadoRRU === 'Encendido') {
+        if (!fotoRRUEncendido || !seApagaraRRU) return false;
+        if (seApagaraRRU === 'Si' && !fotoRRUApagado) return false;
+        return true;
+      }
+      if (estadoRRU === 'Apagado') return !!fotoRRUApagado;
+      if (estadoRRU === 'N/A') return true;
+      return false;
+    })();
+    let completedCount = 0;
+    if (is3GCompleted) completedCount++;
+    if (isRRUCompleted && is3GCompleted) completedCount++;
+    return Math.round((completedCount / 2) * 100);
+  };
+
   if (!planning || !site) {
     return (
-      <SafeAreaView style={styles.container}>
+      <SafeAreaView style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
+        <StatusBar barStyle="light-content" backgroundColor="#000" />
         <Text style={styles.subtitle}>Información no encontrada.</Text>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.saveBtn}>
-          <Text style={styles.saveBtnText}>Volver</Text>
+        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.modalBtnConfirm}>
+          <Text style={styles.modalBtnText}>Volver</Text>
         </TouchableOpacity>
       </SafeAreaView>
     );
@@ -610,6 +840,7 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
 
   return (
     <SafeAreaView style={styles.container}>
+      <StatusBar barStyle="light-content" backgroundColor="#000" />
 
       {/* Modal de previsualización de foto */}
       <Modal visible={!!previewUri} transparent animationType="fade" onRequestClose={() => setPreviewUri(null)}>
@@ -623,7 +854,6 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
         </View>
       </Modal>
 
-      {/* Modal de procesamiento (Ubicación y Marca de Agua) */}
       <Modal visible={isProcessing} transparent animationType="none">
         <View style={styles.processingOverlay}>
           <View style={styles.processingCard}>
@@ -633,12 +863,78 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
           </View>
         </View>
       </Modal>
+
+      {/* Modal para ingresar Ampere */}
+      <Modal
+        visible={showAmpereModal}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setShowAmpereModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Lectura de Ampere</Text>
+            <Text style={styles.modalSubtitle}>Ingrese el valor en formato 00,00 (A)</Text>
+            
+            <View style={styles.ampereInputContainer}>
+              <TextInput
+                style={styles.ampereInput}
+                value={tempAmpere}
+                onChangeText={(val) => {
+                  const numeric = val.replace(/[^0-9]/g, '');
+                  if (numeric.length <= 4) {
+                    let formatted = numeric;
+                    if (numeric.length > 2) {
+                      formatted = numeric.slice(0, 2) + ',' + numeric.slice(2);
+                    }
+                    setTempAmpere(formatted);
+                  }
+                }}
+                placeholder="00,00"
+                keyboardType="numeric"
+                maxLength={5}
+                autoFocus
+              />
+              <Text style={styles.ampereUnit}>A</Text>
+            </View>
+
+            <View style={styles.modalButtons}>
+              <TouchableOpacity 
+                style={[styles.modalBtn, styles.modalBtnCancel]} 
+                onPress={() => setShowAmpereModal(false)}
+              >
+                <Text style={styles.modalBtnText}>Cancelar</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={[styles.modalBtn, styles.modalBtnConfirm]} 
+                onPress={() => {
+                  if (activeAmpereTarget === 'fotoEquipo3GEncendido') {
+                    setAmpere3GEncendido(tempAmpere || '00,00');
+                  } else if (activeAmpereIndex !== null) {
+                    const newValues = [...ampereEmpalme];
+                    newValues[activeAmpereIndex] = tempAmpere || '00,00';
+                    setAmpereEmpalme(newValues);
+                    ampereEmpalmeRef.current = newValues;
+                  }
+                  setShowAmpereModal(false);
+                }}
+              >
+                <Text style={styles.modalBtnText}>Guardar</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
       
       {/* ViewShot oculto fuera de pantalla — genera la imagen con marca de agua */}
-      {pendingUri && (
-        <View style={styles.offscreen}>
-          <ViewShot ref={viewShotRef} style={styles.watermarkContainer}>
-            <Image source={{ uri: pendingUri }} style={styles.watermarkImage} resizeMode="cover" />
+      <View style={styles.offscreen} pointerEvents="none">
+        <ViewShot ref={viewShotRef} options={{ format: 'jpg', quality: 0.8 }}>
+          <View style={styles.watermarkContainer}>
+            {pendingUri ? (
+              <Image source={{ uri: pendingUri }} style={styles.watermarkImage} resizeMode="cover" />
+            ) : (
+              <View style={{ flex: 1, backgroundColor: '#000' }} />
+            )}
             <View style={styles.watermarkBanner}>
               <View style={styles.watermarkRow}>
                 <View style={styles.watermarkTextCol}>
@@ -651,641 +947,605 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
                 <Image source={LOGO_F1} style={styles.watermarkLogo} resizeMode="contain" />
               </View>
             </View>
-          </ViewShot>
-        </View>
-      )}
-
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
-          <Ionicons name="arrow-back" size={24} color={colors.primary} />
-        </TouchableOpacity>
-        <Text style={styles.title}>Detalle de Actividad</Text>
+          </View>
+        </ViewShot>
       </View>
 
-      <ScrollView contentContainerStyle={styles.content}>
-        
-        <View style={styles.siteInfoCard}>
-          <Text style={styles.siteName}>{site.name} ({site.code})</Text>
-          <Text style={styles.siteAddress}>{site.address}, {site.commune}</Text>
-          {!isIniciado && (
-            <TouchableOpacity style={styles.mapsBtn} onPress={openGoogleMaps}>
-              <Ionicons name="navigate" size={20} color={colors.surface} />
-              <Text style={styles.mapsBtnText}>Cómo llegar en Maps</Text>
-            </TouchableOpacity>
+
+      <View style={styles.mainContainer}>
+        {/* Layer 1: Background (Map or Form) */}
+        <View style={styles.backgroundLayer}>
+          {activeFolder === null ? (
+            <View style={styles.mapContainer}>
+              <View style={styles.mockMap}>
+                <View style={styles.mapMarker}>
+                  <View style={styles.markerDot} />
+                  <View style={styles.markerPulse} />
+                </View>
+              </View>
+              <View style={styles.siteInfoOverlay}>
+                <View style={styles.overlayHeaderRow}>
+                  <Text style={styles.overlayTitle}>{site.code} - {site.name}</Text>
+                  <TouchableOpacity onPress={() => navigation.goBack()} style={styles.overlayCloseBtn}>
+                    <Ionicons name="close-circle" size={24} color="rgba(255,255,255,0.4)" />
+                  </TouchableOpacity>
+                </View>
+                <View style={[
+                  styles.statusBadgeSmall,
+                  planning.status === 'Ejecutado' && { backgroundColor: 'rgba(48, 209, 88, 0.15)' }
+                ]}>
+                  <Text style={[
+                    styles.statusBadgeTextSmall,
+                    planning.status === 'Ejecutado' && { color: '#30D158' }
+                  ]}>
+                    {planning.status === 'Ejecutado' ? 'Ejecutado' : `En ejecución • ${elapsedTime || getElapsedTime(planning.startTime)}`}
+                  </Text>
+                </View>
+                
+                <View style={styles.totalProgressBox}>
+                  <View style={styles.totalProgressHeader}>
+                    <Text style={styles.totalProgressLabel}>Avance Total</Text>
+                    <Text style={styles.totalProgressPercent}>
+                      {Math.round((calculateDatosProgress() + calculateApagadoProgress()) / 2)}%
+                    </Text>
+                  </View>
+                  <View style={styles.totalProgressBarBg}>
+                    <View style={[
+                      styles.totalProgressBarFill, 
+                      { 
+                        width: `${(calculateDatosProgress() + calculateApagadoProgress()) / 2}%`,
+                        backgroundColor: getProgressColor((calculateDatosProgress() + calculateApagadoProgress()) / 2)
+                      }
+                    ]} />
+                  </View>
+                </View>
+              </View>
+            </View>
+          ) : (
+            <ScrollView 
+              style={styles.formContainer} 
+              contentContainerStyle={styles.formScrollContent}
+              showsVerticalScrollIndicator={false}
+            >
+              <View style={styles.formSubHeader}>
+                <TouchableOpacity style={styles.formBackBtn} onPress={() => setActiveFolder(null)}>
+                  <Ionicons name="chevron-back" size={24} color={colors.primary} />
+                </TouchableOpacity>
+                <Text style={styles.formSubTitle}>
+                  {activeFolder === 'hallazgos' ? 'Hallazgos Previos' : activeFolder === 'datos' ? 'Datos Generales' : 'Apagado 3G / RRU'}
+                </Text>
+                <View style={{ width: 40 }} />
+              </View>
+              {activeFolder === 'hallazgos' && (
+                <View>
+                  <View style={styles.sectionProgressContainer}>
+                  </View>
+                  <View style={styles.formSection}>
+                    <Text style={styles.label}>Observaciones Encontradas</Text>
+                    <TextInput
+                      style={[styles.input, styles.textArea]}
+                      placeholder="Describe anomalías, riesgos o comentarios..."
+                      value={observaciones}
+                      onChangeText={setObservaciones}
+                      multiline
+                      numberOfLines={4}
+                      editable={!isReadOnly}
+                    />
+                    <Text style={styles.label}>Evidencia Fotográfica ({fotos.length}/10)</Text>
+                    <View style={styles.photoGrid}>
+                      {fotos.map((uri, idx) => (
+                        <TouchableOpacity key={idx} style={styles.photoThumbContainer} onPress={() => setPreviewUri(uri)}>
+                          <Image source={{ uri }} style={styles.photoThumb} />
+                          {!isReadOnly && (
+                            <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removeFoto(idx)}>
+                              {!isReadOnly && <Ionicons name="close-circle" size={24} color={colors.danger} />}
+                            </TouchableOpacity>
+                          )}
+                        </TouchableOpacity>
+                      ))}
+                      {!isReadOnly && fotos.length < 10 && (
+                        <TouchableOpacity style={styles.addPhotoBox} onPress={() => handlePickImage('hallazgos')}>
+                          <Ionicons name="camera" size={32} color="rgba(255,255,255,0.3)" />
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                  </View>
+                </View>
+              )}
+
+              {activeFolder === 'datos' && (
+                <View>
+                  <View style={styles.sectionProgressContainer}>
+                    <View style={styles.progressRow}>
+                      <View style={styles.sectionProgressBarBg}>
+                        <View style={[styles.sectionProgressBarFill, { width: `${calculateDatosProgress()}%`, backgroundColor: getProgressColor(calculateDatosProgress()) }]} />
+                      </View>
+                      <Text style={styles.sectionProgressPercent}>{calculateDatosProgress()}%</Text>
+                    </View>
+                  </View>
+                  <View style={styles.formSection}>
+                    <SelectDropdown label="Tipo de Estructura" value={tipoEstructura} options={tipoEstructuraOptions} onSelect={setTipoEstructura} disabled={isReadOnly} />
+                    {tipoEstructura !== '' && (
+                      <View style={styles.photoField}>
+                        <Text style={styles.label}>Foto Tipo de Estructura</Text>
+                        {fotoEstructura ? (
+                          <View style={styles.photoFullContainer}>
+                            <TouchableOpacity onPress={() => setPreviewUri(fotoEstructura)}>
+                              <Image source={{ uri: fotoEstructura }} style={styles.photoFull} resizeMode="cover" disabled={isReadOnly} />
+                            </TouchableOpacity>
+                            <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotoEstructura')}>
+                              {!isReadOnly && <Ionicons name="close-circle" size={24} color={colors.danger} />}
+                            </TouchableOpacity>
+                          </View>
+                        ) : !isReadOnly ? (
+                          <TouchableOpacity style={styles.addPhotoLarge} onPress={() => handlePickImage('fotoEstructura')}>
+                            <Ionicons name="camera" size={32} color="rgba(255,255,255,0.3)" />
+                            <Text style={styles.addPhotoText}>Subir Foto</Text>
+                          </TouchableOpacity>
+                        ) : null}
+                      </View>
+                    )}
+                    {fotoEstructura !== '' && (
+                      <SelectDropdown label="Tipo de Contenedor" value={tipoContenedor} options={tipoContenedorOptions} onSelect={setTipoContenedor} disabled={isReadOnly} />
+                    )}
+                    {tipoContenedor !== '' && (
+                      <View>
+                        <View style={styles.photoField}>
+                          <Text style={styles.label}>Foto Vista Fuera del Contenedor</Text>
+                          {fotoFueraContenedor ? (
+                            <View style={styles.photoFullContainer}>
+                              <TouchableOpacity onPress={() => setPreviewUri(fotoFueraContenedor)}>
+                                <Image source={{ uri: fotoFueraContenedor }} style={styles.photoFull} resizeMode="cover" disabled={isReadOnly} />
+                              </TouchableOpacity>
+                              <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotoFueraContenedor')}>
+                                {!isReadOnly && <Ionicons name="close-circle" size={24} color={colors.danger} />}
+                              </TouchableOpacity>
+                            </View>
+                          ) : (
+                            <TouchableOpacity style={styles.addPhotoLarge} onPress={() => handlePickImage('fotoFueraContenedor')}>
+                              <Ionicons name="camera" size={32} color="rgba(255,255,255,0.3)" disabled={isReadOnly} />
+                              <Text style={styles.addPhotoText}>Subir Foto</Text>
+                            </TouchableOpacity>
+                          )}
+                        </View>
+                        {fotoFueraContenedor !== '' && (
+                          <View>
+                            <Text style={styles.label}>Vistas Generales del Sitio (2 fotos)</Text>
+                            <View style={styles.photoRow}>
+                              {[0, 1].map((i) => (
+                                <View key={`gs-${i}`} style={styles.photoCol}>
+                                  {fotosGeneralesSitio[i] ? (
+                                    <View style={styles.photoThumbContainer}>
+                                      <TouchableOpacity onPress={() => setPreviewUri(fotosGeneralesSitio[i])}>
+                                        <Image source={{ uri: fotosGeneralesSitio[i] }} style={styles.photoThumb} disabled={isReadOnly} />
+                                      </TouchableOpacity>
+                                      <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotosGeneralesSitio', i)}>
+                                        {!isReadOnly && <Ionicons name="close-circle" size={24} color={colors.danger} />}
+                                      </TouchableOpacity>
+                                    </View>
+                                  ) : (
+                                    <TouchableOpacity style={styles.addPhotoBox} onPress={() => handlePickImage('fotosGeneralesSitio', i)}>
+                                      <Ionicons name="camera" size={24} color="rgba(255,255,255,0.3)" disabled={isReadOnly} />
+                                    </TouchableOpacity>
+                                  )}
+                                </View>
+                              ))}
+                            </View>
+                          </View>
+                        )}
+                        {fotosGeneralesSitio[0] !== '' && fotosGeneralesSitio[1] !== '' && (
+                          <View>
+                            <Text style={styles.label}>Vistas Interior del Contenedor (2 fotos)</Text>
+                            <View style={styles.photoRow}>
+                              {[0, 1].map((i) => (
+                                <View key={`ic-${i}`} style={styles.photoCol}>
+                                  {fotosInteriorContenedor[i] ? (
+                                    <View style={styles.photoThumbContainer}>
+                                      <TouchableOpacity onPress={() => setPreviewUri(fotosInteriorContenedor[i])}>
+                                        <Image source={{ uri: fotosInteriorContenedor[i] }} style={styles.photoThumb} disabled={isReadOnly} />
+                                      </TouchableOpacity>
+                                      <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotosInteriorContenedor', i)}>
+                                        {!isReadOnly && <Ionicons name="close-circle" size={24} color={colors.danger} />}
+                                      </TouchableOpacity>
+                                    </View>
+                                  ) : (
+                                    <TouchableOpacity style={styles.addPhotoBox} onPress={() => handlePickImage('fotosInteriorContenedor', i)}>
+                                      <Ionicons name="camera" size={24} color="rgba(255,255,255,0.3)" disabled={isReadOnly} />
+                                    </TouchableOpacity>
+                                  )}
+                                </View>
+                              ))}
+                            </View>
+                          </View>
+                        )}
+                      </View>
+                    )}
+                    {fotosInteriorContenedor[0] !== '' && fotosInteriorContenedor[1] !== '' && (
+                      <SelectDropdown label="Tipo de Empalme" value={tipoEmpalme} options={tipoEmpalmeOptions} onSelect={(val) => {
+                        setTipoEmpalme(val);
+                        if (val === 'Monofásico') setFotosEmpalme(['']);
+                        else if (val === 'Trifásico') setFotosEmpalme(['', '', '']);
+                      }} disabled={isReadOnly} />
+                    )}
+                    {tipoEmpalme === 'Monofásico' && (
+                      <View style={styles.photoField}>
+                        <Text style={styles.label}>Foto Consumo Inicial</Text>
+                        {fotosEmpalme[0] ? (
+                          <View>
+                            <View style={styles.photoThumbContainer}>
+                              <TouchableOpacity onPress={() => setPreviewUri(fotosEmpalme[0])}>
+                                <Image source={{ uri: fotosEmpalme[0] }} style={styles.photoFull} disabled={isReadOnly} />
+                              </TouchableOpacity>
+                              <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotosEmpalme', 0)}>
+                                {!isReadOnly && <Ionicons name="close-circle" size={24} color={colors.danger} />}
+                              </TouchableOpacity>
+                            </View>
+                            <TouchableOpacity 
+                              style={styles.ampereDisplay} 
+                              onPress={() => !isReadOnly && (setActiveAmpereTarget(null), setActiveAmpereIndex(0), setTempAmpere(ampereEmpalme[0]), setShowAmpereModal(true))}
+                              activeOpacity={isReadOnly ? 1 : 0.7}
+                            >
+                              <Text style={styles.ampereText}>Lectura: {ampereEmpalme[0] || '00,00'} A</Text>
+                              <Ionicons name="create-outline" size={16} color={colors.primary} disabled={isReadOnly} />
+                            </TouchableOpacity>
+                          </View>
+                        ) : (
+                          <TouchableOpacity style={styles.addPhotoLarge} onPress={() => handlePickImage('fotosEmpalme', 0)}>
+                            <Ionicons name="camera" size={32} color="rgba(255,255,255,0.3)" disabled={isReadOnly} />
+                            <Text style={styles.addPhotoText}>Subir Foto</Text>
+                          </TouchableOpacity>
+                        )}
+                      </View>
+                    )}
+                    {tipoEmpalme === 'Trifásico' && (
+                      <View style={{ marginTop: 10 }}>
+                        <Text style={styles.label}>Fotos Consumo Inicial Trifásico</Text>
+                        {['Fase R', 'Fase S', 'Fase T'].map((label, i) => (
+                          <View key={i} style={styles.trifasicoRow}>
+                            <View style={styles.trifasicoPhotoCol}>
+                              {fotosEmpalme[i] ? (
+                                <View style={styles.trifasicoPhotoWrapper}>
+                                  <TouchableOpacity onPress={() => setPreviewUri(fotosEmpalme[i])}>
+                                    <Image source={{ uri: fotosEmpalme[i] }} style={styles.photoThumb} disabled={isReadOnly} />
+                                  </TouchableOpacity>
+                                  <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotosEmpalme', i)}>
+                                    {!isReadOnly && <Ionicons name="close-circle" size={24} color={colors.danger} />}
+                                  </TouchableOpacity>
+                                </View>
+                              ) : (
+                                <TouchableOpacity style={styles.trifasicoAddBox} onPress={() => handlePickImage('fotosEmpalme', i)}>
+                                  <Ionicons name="camera" size={24} color="rgba(255,255,255,0.3)" disabled={isReadOnly} />
+                                </TouchableOpacity>
+                              )}
+                            </View>
+                            <View style={styles.trifasicoInfoCol}>
+                              <Text style={styles.trifasicoLabel}>{label}</Text>
+                              {fotosEmpalme[i] && (
+                                <TouchableOpacity 
+                                  style={styles.ampereDisplayTrifasico} 
+                                  onPress={() => !isReadOnly && (setActiveAmpereTarget(null), setActiveAmpereIndex(i), setTempAmpere(ampereEmpalme[i]), setShowAmpereModal(true))}
+                                  activeOpacity={isReadOnly ? 1 : 0.7}
+                                >
+                                  <Text style={styles.ampereTextTrifasico}>{ampereEmpalme[i] || '00,00'} A</Text>
+                                  <Ionicons name="create-outline" size={16} color={colors.primary} disabled={isReadOnly} />
+                                </TouchableOpacity>
+                              )}
+                            </View>
+                          </View>
+                        ))}
+                      </View>
+                    )}
+                    {((tipoEmpalme === 'Monofásico' && fotosEmpalme[0]) || (tipoEmpalme === 'Trifásico' && fotosEmpalme[0] && fotosEmpalme[1] && fotosEmpalme[2])) && (
+                      <View><Text style={styles.label}>Capacidad de Protección General</Text><TextInput style={styles.input} placeholder="Ej: 40" value={capacidadProteccion} onChangeText={setCapacidadProteccion} keyboardType="numeric" editable={!isReadOnly} /></View>
+                    )}
+                    {capacidadProteccion !== '' && (
+                      <View style={styles.photoField}>
+                        <Text style={styles.label}>Foto Medidor Eléctrico</Text>
+                        {fotoMedidor ? (
+                          <View style={styles.photoFullContainer}>
+                            <TouchableOpacity onPress={() => setPreviewUri(fotoMedidor)}>
+                              <Image source={{ uri: fotoMedidor }} style={styles.photoFull} resizeMode="cover" disabled={isReadOnly} />
+                            </TouchableOpacity>
+                            <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotoMedidor')}>
+                              {!isReadOnly && <Ionicons name="close-circle" size={24} color={colors.danger} />}
+                            </TouchableOpacity>
+                          </View>
+                        ) : (
+                          <TouchableOpacity style={styles.addPhotoLarge} onPress={() => handlePickImage('fotoMedidor')}>
+                            <Ionicons name="camera" size={32} color="rgba(255,255,255,0.3)" disabled={isReadOnly} />
+                            <Text style={styles.addPhotoText}>Subir Foto</Text>
+                          </TouchableOpacity>
+                        )}
+                      </View>
+                    )}
+                    {fotoMedidor !== '' && (
+                      <View style={styles.photoField}>
+                        <Text style={styles.label}>Foto Sector Medidor</Text>
+                        {fotoSectorMedidor ? (
+                          <View style={styles.photoFullContainer}>
+                            <TouchableOpacity onPress={() => setPreviewUri(fotoSectorMedidor)}>
+                              <Image source={{ uri: fotoSectorMedidor }} style={styles.photoFull} resizeMode="cover" disabled={isReadOnly} />
+                            </TouchableOpacity>
+                            <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotoSectorMedidor')}>
+                              {!isReadOnly && <Ionicons name="close-circle" size={24} color={colors.danger} />}
+                            </TouchableOpacity>
+                          </View>
+                        ) : (
+                          <TouchableOpacity style={styles.addPhotoLarge} onPress={() => handlePickImage('fotoSectorMedidor')}>
+                            <Ionicons name="camera" size={32} color="rgba(255,255,255,0.3)" disabled={isReadOnly} />
+                            <Text style={styles.addPhotoText}>Subir Foto</Text>
+                          </TouchableOpacity>
+                        )}
+                      </View>
+                    )}
+                    {fotoSectorMedidor !== '' && (
+                      <View><Text style={styles.label}>N° Medidor</Text><TextInput style={styles.input} placeholder="Número" value={numeroMedidor} onChangeText={setNumeroMedidor} keyboardType="numeric" editable={!isReadOnly} /></View>
+                    )}
+                    {numeroMedidor !== '' && (
+                      <View><Text style={styles.label}>Lectura Consumo KW_h</Text><TextInput style={styles.input} placeholder="Lectura" value={lecturaConsumo} onChangeText={setLecturaConsumo} keyboardType="numeric" editable={!isReadOnly} /></View>
+                    )}
+                  </View>
+                </View>
+              )}
+
+              {activeFolder === 'apagado' && (
+                <View>
+                  <View style={styles.sectionProgressContainer}>
+                    <View style={styles.progressRow}>
+                      <View style={styles.sectionProgressBarBg}>
+                        <View style={[styles.sectionProgressBarFill, { width: `${calculateApagadoProgress()}%`, backgroundColor: getProgressColor(calculateApagadoProgress()) }]} disabled={isReadOnly} />
+                      </View>
+                      <Text style={styles.sectionProgressPercent}>{calculateApagadoProgress()}%</Text>
+                    </View>
+                  </View>
+                  <View style={styles.formSection}>
+                    <SelectDropdown label="Estado Inicial 3G1900" value={estado3G} options={estadoEquipoOptions} onSelect={handleEstado3GChange} disabled={isReadOnly} />
+                    {estado3G === 'Encendido' && (
+                      <View>
+                        <View style={styles.photoField}>
+                          <Text style={styles.label}>Foto Equipo 3G Encendido</Text>
+                          {fotoEquipo3GEncendido ? (
+                            <View style={styles.photoFullContainer}>
+                              <TouchableOpacity onPress={() => setPreviewUri(fotoEquipo3GEncendido)}>
+                                <Image source={{ uri: fotoEquipo3GEncendido }} style={styles.photoFull} resizeMode="cover" disabled={isReadOnly} />
+                              </TouchableOpacity>
+                                {!isReadOnly && (
+                                  <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotoEquipo3GEncendido')}>
+                                    <Ionicons name="close-circle" size={24} color={colors.danger} />
+                                  </TouchableOpacity>
+                                )}
+                                <TouchableOpacity style={styles.ampereDisplayMini} onPress={() => {
+                                setActiveAmpereTarget('fotoEquipo3GEncendido');
+                                setActiveAmpereIndex(null);
+                                setTempAmpere(ampere3GEncendido);
+                                setShowAmpereModal(true);
+                              }}>
+                                <Text style={styles.ampereTextSmall}>Lectura: {ampere3GEncendido || '00,00'} A</Text>
+                              </TouchableOpacity>
+                            </View>
+                          ) : (
+                            <TouchableOpacity style={styles.addPhotoLarge} onPress={() => handlePickImage('fotoEquipo3GEncendido')}>
+                              <Ionicons name="camera" size={32} color="rgba(255,255,255,0.3)" disabled={isReadOnly} />
+                              <Text style={styles.addPhotoText}>Subir Foto</Text>
+                            </TouchableOpacity>
+                          )}
+                        </View>
+                        <View style={styles.photoField}>
+                          <Text style={styles.label}>Foto Breaker 3G Encendido</Text>
+                          {fotoBreaker3GEncendido ? (
+                            <View style={styles.photoFullContainer}>
+                              <TouchableOpacity onPress={() => setPreviewUri(fotoBreaker3GEncendido)}>
+                                <Image source={{ uri: fotoBreaker3GEncendido }} style={styles.photoFull} resizeMode="cover" disabled={isReadOnly} />
+                              </TouchableOpacity>
+                                {!isReadOnly && (
+                                  <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotoBreaker3GEncendido')}>
+                                    <Ionicons name="close-circle" size={24} color={colors.danger} />
+                                  </TouchableOpacity>
+                                )}
+                            </View>
+                          ) : (
+                            <TouchableOpacity style={styles.addPhotoLarge} onPress={() => handlePickImage('fotoBreaker3GEncendido')}>
+                              <Ionicons name="camera" size={32} color="rgba(255,255,255,0.3)" disabled={isReadOnly} />
+                              <Text style={styles.addPhotoText}>Subir Foto</Text>
+                            </TouchableOpacity>
+                          )}
+                        </View>
+                      </View>
+                    )}
+                    {((estado3G === 'Encendido' && seApagara3G === 'Si') || (estado3G === 'Apagado' && seRetirara3G === 'Si')) && (
+                      <View>
+                        <View style={styles.photoField}>
+                          <Text style={styles.label}>Foto Breaker 3G Apagado</Text>
+                          {fotoBreaker3GApagado ? (
+                            <View style={styles.photoFullContainer}>
+                              <TouchableOpacity onPress={() => setPreviewUri(fotoBreaker3GApagado)}>
+                                <Image source={{ uri: fotoBreaker3GApagado }} style={styles.photoFull} resizeMode="cover" disabled={isReadOnly} />
+                              </TouchableOpacity>
+                                {!isReadOnly && (
+                                  <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotoBreaker3GApagado')}>
+                                    <Ionicons name="close-circle" size={24} color={colors.danger} />
+                                  </TouchableOpacity>
+                                )}
+                            </View>
+                          ) : (
+                            <TouchableOpacity style={styles.addPhotoLarge} onPress={() => handlePickImage('fotoBreaker3GApagado')}>
+                              <Ionicons name="camera" size={32} color="rgba(255,255,255,0.3)" disabled={isReadOnly} />
+                              <Text style={styles.addPhotoText}>Subir Foto</Text>
+                            </TouchableOpacity>
+                          )}
+                        </View>
+                        <View style={styles.photoField}>
+                          <Text style={styles.label}>Foto Equipo 3G Apagado</Text>
+                          {fotoEquipo3GApagado ? (
+                            <View style={styles.photoFullContainer}>
+                              <TouchableOpacity onPress={() => setPreviewUri(fotoEquipo3GApagado)}>
+                                <Image source={{ uri: fotoEquipo3GApagado }} style={styles.photoFull} resizeMode="cover" disabled={isReadOnly} />
+                              </TouchableOpacity>
+                                {!isReadOnly && (
+                                  <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotoEquipo3GApagado')}>
+                                    <Ionicons name="close-circle" size={24} color={colors.danger} />
+                                  </TouchableOpacity>
+                                )}
+                            </View>
+                          ) : (
+                            <TouchableOpacity style={styles.addPhotoLarge} onPress={() => handlePickImage('fotoEquipo3GApagado')}>
+                              <Ionicons name="camera" size={32} color="rgba(255,255,255,0.3)" disabled={isReadOnly} />
+                              <Text style={styles.addPhotoText}>Subir Foto</Text>
+                            </TouchableOpacity>
+                          )}
+                        </View>
+                      </View>
+                    )}
+                    {((estado3G === 'Encendido' && seApagara3G === 'Si') || (estado3G === 'Apagado' && seRetirara3G === 'Si') || (estado3G === 'N/A')) && (
+                      <View style={styles.photoField}>
+                        <Text style={styles.label}>Foto Espacio Retirado</Text>
+                        {fotoEspacioRetirado ? (
+                          <View style={styles.photoFullContainer}>
+                            <TouchableOpacity onPress={() => setPreviewUri(fotoEspacioRetirado)}>
+                              <Image source={{ uri: fotoEspacioRetirado }} style={styles.photoFull} resizeMode="cover" disabled={isReadOnly} />
+                            </TouchableOpacity>
+                                {!isReadOnly && (
+                                  <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotoEspacioRetirado')}>
+                                    <Ionicons name="close-circle" size={24} color={colors.danger} />
+                                  </TouchableOpacity>
+                                )}
+                          </View>
+                        ) : (
+                          <TouchableOpacity style={styles.addPhotoLarge} onPress={() => handlePickImage('fotoEspacioRetirado')}>
+                            <Ionicons name="camera" size={32} color="rgba(255,255,255,0.3)" disabled={isReadOnly} />
+                            <Text style={styles.addPhotoText}>Subir Foto</Text>
+                          </TouchableOpacity>
+                        )}
+                      </View>
+                    )}
+                    {(() => {
+                      if (estado3G === 'Encendido') {
+                        if (!fotoEquipo3GEncendido || !fotoBreaker3GEncendido || !seApagara3G) return false;
+                        if (seApagara3G === 'Si' && (!fotoBreaker3GApagado || !fotoEquipo3GApagado || !fotoEspacioRetirado)) return false;
+                        return true;
+                      }
+                      if (estado3G === 'Apagado') {
+                        if (!seRetirara3G) return false;
+                        if (seRetirara3G === 'Si' && (!fotoBreaker3GApagado || !fotoEquipo3GApagado || !fotoEspacioRetirado)) return false;
+                        return true;
+                      }
+                      if (estado3G === 'N/A') return !!fotoEspacioRetirado;
+                      return false;
+                    })() && (
+                      <View style={{ marginTop: 24, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.1)', paddingTop: 16 }}>
+                        <SelectDropdown label="Estado Inicial RRU" value={estadoRRU} options={estadoEquipoOptions} onSelect={handleEstadoRRUChange} disabled={isReadOnly} />
+                        {estadoRRU === 'Encendido' && (
+                          <View style={styles.photoField}><Text style={styles.label}>Foto Breakers RRU Encendidos</Text>{fotoRRUEncendido ? (<View style={styles.photoFullContainer}><TouchableOpacity onPress={() => setPreviewUri(fotoRRUEncendido)}><Image source={{ uri: fotoRRUEncendido }} style={styles.photoFull} resizeMode="cover" /></TouchableOpacity>{!isReadOnly && (<TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotoRRUEncendido')}><Ionicons name="close-circle" size={24} color={colors.danger} /></TouchableOpacity>)}</View>) : !isReadOnly ? (<TouchableOpacity style={styles.addPhotoLarge} onPress={() => handlePickImage('fotoRRUEncendido')}><Ionicons name="camera" size={32} color="rgba(255,255,255,0.3)" /><Text style={styles.addPhotoText}>Subir Foto</Text></TouchableOpacity>) : null}</View>
+                        )}
+                        {((estadoRRU === 'Encendido' && seApagaraRRU === 'Si') || (estadoRRU === 'Apagado')) && (
+                          <View style={styles.photoField}><Text style={styles.label}>Foto Breakers RRU Apagados</Text>{fotoRRUApagado ? (<View style={styles.photoFullContainer}><TouchableOpacity onPress={() => setPreviewUri(fotoRRUApagado)}><Image source={{ uri: fotoRRUApagado }} style={styles.photoFull} resizeMode="cover" /></TouchableOpacity>{!isReadOnly && (<TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotoRRUApagado')}><Ionicons name="close-circle" size={24} color={colors.danger} /></TouchableOpacity>)}</View>) : !isReadOnly ? (<TouchableOpacity style={styles.addPhotoLarge} onPress={() => handlePickImage('fotoRRUApagado')}><Ionicons name="camera" size={32} color="rgba(255,255,255,0.3)" /><Text style={styles.addPhotoText}>Subir Foto</Text></TouchableOpacity>) : null}</View>
+                        )}
+                      </View>
+                    )}
+                  </View>
+                </View>
+              )}
+            </ScrollView>
           )}
         </View>
 
-        {!isIniciado ? (
-          <TouchableOpacity style={styles.iniciarBtn} onPress={handleIniciarActividad}>
-            <Ionicons name="play" size={24} color={colors.surface} />
-            <Text style={styles.iniciarBtnText}>Iniciar Actividad</Text>
-          </TouchableOpacity>
-        ) : (
-          <View style={styles.enEjecucionContainer}>
-            <View style={styles.statusBadge}>
-              <Ionicons name="time" size={16} color={colors.surface} />
-              <Text style={styles.statusBadgeText}>
-                Iniciado: {planning.startTime ? new Date(planning.startTime).toLocaleString('es-CL') : 'N/A'}
-              </Text>
-            </View>
-
-            <View style={styles.folderSection}>
-              {/* Header clicable Hallazgos Previos */}
-              {(() => {
-                const hasInfo = observaciones.trim().length > 0 || fotos.length > 0;
-                const folderColor = hasInfo ? colors.success : colors.error;
-                return (
-                  <TouchableOpacity style={styles.folderHeader} onPress={toggleFolder} activeOpacity={0.7}>
-                    <View style={styles.folderHeaderLeft}>
-                      <Ionicons name={isFolderOpen ? 'folder-open' : 'folder'} size={24} color={folderColor} />
-                      <Text style={[styles.folderTitle, { color: folderColor }]}>Hallazgos Previos</Text>
-                      {fotos.length > 0 && (
-                        <View style={styles.fotoBadge}>
-                          <Text style={styles.fotoBadgeText}>{fotos.length}</Text>
-                        </View>
-                      )}
-                    </View>
-                    <Ionicons
-                      name={isFolderOpen ? 'chevron-up' : 'chevron-down'}
-                      size={20}
-                      color={colors.textSecondary}
-                    />
-                  </TouchableOpacity>
-                );
-              })()}
-              {/* Contenido expandible */}
-              {isFolderOpen && (
-                <View style={styles.folderBody}>
-                  <Text style={styles.label}>Observaciones Encontradas</Text>
-                  <TextInput
-                    style={[styles.input, styles.textArea]}
-                    placeholder="Describe anomalías, riesgos o comentarios del sitio..."
-                    value={observaciones}
-                    onChangeText={setObservaciones}
-                    multiline
-                    numberOfLines={4}
-                    textAlignVertical="top"
-                  />
-
-                  <Text style={styles.label}>Evidencia Fotográfica ({fotos.length}/10)</Text>
-                  
-                  <View style={styles.photoGrid}>
-                    {fotos.map((uri, idx) => (
-                      <TouchableOpacity key={idx} style={styles.photoThumbContainer} onPress={() => setPreviewUri(uri)} activeOpacity={0.8}>
-                        <Image source={{ uri }} style={styles.photoThumb} />
-                        <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removeFoto(idx)}>
-                          <Ionicons name="close-circle" size={24} color={colors.error} />
-                        </TouchableOpacity>
-                        <View style={styles.zoomHint}>
-                          <Ionicons name="expand" size={12} color="#fff" />
-                        </View>
-                      </TouchableOpacity>
-                    ))}
-                    {fotos.length < 10 && !pendingUri && (
-                      <TouchableOpacity style={styles.addPhotoBox} onPress={() => handlePickImage('hallazgos')}>
-                        <Ionicons name="camera" size={32} color={colors.textSecondary} />
-                        <Text style={styles.addPhotoText}>Añadir</Text>
-                      </TouchableOpacity>
-                    )}
-                  </View>
+        {/* Layer 2: Floating Panel (Find My Style) */}
+        {activeFolder === null && (
+          <View style={styles.bottomPanel}>
+            <View style={styles.panelHandle} />
+          
+            <View style={styles.panelContent}>
+              <Text style={styles.panelTitle}>Tareas de Terreno</Text>
+              
+              <TouchableOpacity style={styles.menuItem} onPress={() => setActiveFolder('hallazgos')} activeOpacity={0.7}>
+                <View style={[styles.menuIconContainer, { backgroundColor: '#FF3B3020' }]}>
+                  <Ionicons name="warning" size={24} color="#FF3B30" />
                 </View>
-              )}
-            </View>
-
-            <View style={[styles.folderSection, { marginTop: 16 }]}>
-              {/* Header clicable Datos Generales */}
-              {(() => {
-                const totalFields = tipoEmpalme === 'Trifásico' ? 17 : 15;
-                let completedFields = 0;
-                
-                if (tipoEstructura) completedFields++;
-                if (fotoEstructura) completedFields++;
-                if (tipoContenedor) completedFields++;
-                if (fotoFueraContenedor) completedFields++;
-                if (fotosGeneralesSitio[0]) completedFields++;
-                if (fotosGeneralesSitio[1]) completedFields++;
-                if (fotosInteriorContenedor[0]) completedFields++;
-                if (fotosInteriorContenedor[1]) completedFields++;
-                
-                if (tipoEmpalme) completedFields++;
-                if (capacidadProteccion) completedFields++;
-                if (fotoMedidor) completedFields++;
-                if (fotoSectorMedidor) completedFields++;
-                if (numeroMedidor) completedFields++;
-                if (lecturaConsumo) completedFields++;
-                
-                if (tipoEmpalme === 'Monofásico') {
-                  if (fotosEmpalme[0]) completedFields++;
-                } else if (tipoEmpalme === 'Trifásico') {
-                  if (fotosEmpalme[0]) completedFields++;
-                  if (fotosEmpalme[1]) completedFields++;
-                  if (fotosEmpalme[2]) completedFields++;
-                }
-
-                const progress = Math.round((completedFields / totalFields) * 100);
-                
-                let dgColor = colors.error; // 0% Red
-                if (progress === 100) dgColor = colors.success; // 100% Green
-                else if (progress > 0) dgColor = '#FFA500'; // In progress Orange
-                
-                return (
-                  <TouchableOpacity style={styles.folderHeader} onPress={toggleDG} activeOpacity={0.7}>
-                    <View style={styles.folderHeaderLeft}>
-                      <Ionicons name={isDGOpen ? 'folder-open' : 'folder'} size={24} color={dgColor} />
-                      <Text style={[styles.folderTitle, { color: dgColor }]}>
-                        Datos Generales ({progress}%)
-                      </Text>
-                    </View>
-                    <Ionicons
-                      name={isDGOpen ? 'chevron-up' : 'chevron-down'}
-                      size={20}
-                      color={colors.textSecondary}
-                    />
-                  </TouchableOpacity>
-                );
-              })()}
-              {/* Contenido expandible Datos Generales */}
-              {isDGOpen && (
-                <View style={styles.folderBody}>
-                  <SelectDropdown 
-                    label="Tipo de Estructura" 
-                    value={tipoEstructura} 
-                    options={tipoEstructuraOptions} 
-                    onSelect={setTipoEstructura} 
-                  />
-
-                  {tipoEstructura !== '' && (
-                    <View style={styles.photoField}>
-                      <Text style={styles.label}>Foto Tipo de Estructura</Text>
-                      {fotoEstructura ? (
-                        <View style={styles.photoThumbContainer}>
-                          <TouchableOpacity onPress={() => setPreviewUri(fotoEstructura)}>
-                            <Image source={{ uri: fotoEstructura }} style={styles.photoFull} />
-                          </TouchableOpacity>
-                          <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotoEstructura')}>
-                            <Ionicons name="close-circle" size={24} color={colors.error} />
-                          </TouchableOpacity>
-                        </View>
-                      ) : (
-                        <TouchableOpacity style={styles.addPhotoLarge} onPress={() => handlePickImage('fotoEstructura')}>
-                          <Ionicons name="camera" size={32} color={colors.textSecondary} />
-                          <Text style={styles.addPhotoText}>Subir Foto</Text>
-                        </TouchableOpacity>
-                      )}
-                    </View>
-                  )}
-
-                  <SelectDropdown 
-                    label="Tipo de Contenedor" 
-                    value={tipoContenedor} 
-                    options={tipoContenedorOptions} 
-                    onSelect={setTipoContenedor} 
-                  />
-
-                  {tipoContenedor !== '' && (
-                    <View>
-                      <View style={styles.photoField}>
-                        <Text style={styles.label}>Foto Vista Fuera del Contenedor</Text>
-                        {fotoFueraContenedor ? (
-                          <View style={styles.photoThumbContainer}>
-                            <TouchableOpacity onPress={() => setPreviewUri(fotoFueraContenedor)}>
-                              <Image source={{ uri: fotoFueraContenedor }} style={styles.photoFull} />
-                            </TouchableOpacity>
-                            <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotoFueraContenedor')}>
-                              <Ionicons name="close-circle" size={24} color={colors.error} />
-                            </TouchableOpacity>
-                          </View>
-                        ) : (
-                          <TouchableOpacity style={styles.addPhotoLarge} onPress={() => handlePickImage('fotoFueraContenedor')}>
-                            <Ionicons name="camera" size={32} color={colors.textSecondary} />
-                            <Text style={styles.addPhotoText}>Subir Foto</Text>
-                          </TouchableOpacity>
-                        )}
-                      </View>
-
-                      <Text style={styles.label}>Vistas Generales del Sitio</Text>
-                      <View style={styles.photoRow}>
-                        {[0, 1].map((i) => (
-                          <View key={`gs-${i}`} style={[styles.photoCol, { width: '48%' }]}>
-                            {fotosGeneralesSitio[i] ? (
-                              <View style={styles.photoThumbContainer}>
-                                <TouchableOpacity onPress={() => setPreviewUri(fotosGeneralesSitio[i])}>
-                                  <Image source={{ uri: fotosGeneralesSitio[i] }} style={styles.photoThumb} />
-                                </TouchableOpacity>
-                                <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotosGeneralesSitio', i)}>
-                                  <Ionicons name="close-circle" size={24} color={colors.error} />
-                                </TouchableOpacity>
-                              </View>
-                            ) : (
-                              <TouchableOpacity style={styles.addPhotoBox} onPress={() => handlePickImage('fotosGeneralesSitio', i)}>
-                                <Ionicons name="camera" size={24} color={colors.textSecondary} />
-                                <Text style={styles.addPhotoText}>Añadir</Text>
-                              </TouchableOpacity>
-                            )}
-                          </View>
-                        ))}
-                      </View>
-
-                      <Text style={styles.label}>Vistas Interior del Contenedor</Text>
-                      <View style={styles.photoRow}>
-                        {[0, 1].map((i) => (
-                          <View key={`ic-${i}`} style={[styles.photoCol, { width: '48%' }]}>
-                            {fotosInteriorContenedor[i] ? (
-                              <View style={styles.photoThumbContainer}>
-                                <TouchableOpacity onPress={() => setPreviewUri(fotosInteriorContenedor[i])}>
-                                  <Image source={{ uri: fotosInteriorContenedor[i] }} style={styles.photoThumb} />
-                                </TouchableOpacity>
-                                <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotosInteriorContenedor', i)}>
-                                  <Ionicons name="close-circle" size={24} color={colors.error} />
-                                </TouchableOpacity>
-                              </View>
-                            ) : (
-                              <TouchableOpacity style={styles.addPhotoBox} onPress={() => handlePickImage('fotosInteriorContenedor', i)}>
-                                <Ionicons name="camera" size={24} color={colors.textSecondary} />
-                                <Text style={styles.addPhotoText}>Añadir</Text>
-                              </TouchableOpacity>
-                            )}
-                          </View>
-                        ))}
-                      </View>
-                    </View>
-                  )}
-
-                  <SelectDropdown 
-                    label="Tipo de Empalme" 
-                    value={tipoEmpalme} 
-                    options={tipoEmpalmeOptions} 
-                    onSelect={(val) => {
-                      setTipoEmpalme(val);
-                      if (val === 'Monofásico') setFotosEmpalme(['']);
-                      else if (val === 'Trifásico') setFotosEmpalme(['', '', '']);
-                    }} 
-                  />
-
-                  {tipoEmpalme === 'Monofásico' && (
-                    <View style={styles.photoField}>
-                      <Text style={styles.label}>Foto Consumo Inicial (Breaker General CA)</Text>
-                      {fotosEmpalme[0] ? (
-                        <View style={styles.photoThumbContainer}>
-                          <TouchableOpacity onPress={() => setPreviewUri(fotosEmpalme[0])}>
-                            <Image source={{ uri: fotosEmpalme[0] }} style={styles.photoFull} />
-                          </TouchableOpacity>
-                          <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotosEmpalme', 0)}>
-                            <Ionicons name="close-circle" size={24} color={colors.error} />
-                          </TouchableOpacity>
-                        </View>
-                      ) : (
-                        <TouchableOpacity style={styles.addPhotoLarge} onPress={() => handlePickImage('fotosEmpalme', 0)}>
-                          <Ionicons name="camera" size={32} color={colors.textSecondary} />
-                          <Text style={styles.addPhotoText}>Subir Foto</Text>
-                        </TouchableOpacity>
-                      )}
-                    </View>
-                  )}
-
-                  {tipoEmpalme === 'Trifásico' && (
-                    <View>
-                      <Text style={styles.label}>Fotos Consumo Inicial Trifásico (Fase R, S, T)</Text>
-                      <View style={styles.photoRow}>
-                        {['Fase R', 'Fase S', 'Fase T'].map((label, i) => (
-                          <View key={i} style={styles.photoCol}>
-                            <Text style={styles.smallLabel}>{label}</Text>
-                            {fotosEmpalme[i] ? (
-                              <View style={styles.photoThumbContainer}>
-                                <TouchableOpacity onPress={() => setPreviewUri(fotosEmpalme[i])}>
-                                  <Image source={{ uri: fotosEmpalme[i] }} style={styles.photoThumb} />
-                                </TouchableOpacity>
-                                <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotosEmpalme', i)}>
-                                  <Ionicons name="close-circle" size={24} color={colors.error} />
-                                </TouchableOpacity>
-                              </View>
-                            ) : (
-                              <TouchableOpacity style={styles.addPhotoBox} onPress={() => handlePickImage('fotosEmpalme', i)}>
-                                <Ionicons name="camera" size={24} color={colors.textSecondary} />
-                              </TouchableOpacity>
-                            )}
-                          </View>
-                        ))}
-                      </View>
-                    </View>
-                  )}
-
-                  <Text style={styles.label}>Capacidad de Protección General</Text>
-                  <TextInput
-                    style={styles.input}
-                    placeholder="Ej: 40"
-                    value={capacidadProteccion}
-                    onChangeText={setCapacidadProteccion}
-                    keyboardType="numeric"
-                  />
-
-                  <View style={styles.photoField}>
-                    <Text style={styles.label}>Foto Medidor Eléctrico</Text>
-                    {fotoMedidor ? (
-                      <View style={styles.photoThumbContainer}>
-                        <TouchableOpacity onPress={() => setPreviewUri(fotoMedidor)}>
-                          <Image source={{ uri: fotoMedidor }} style={styles.photoFull} />
-                        </TouchableOpacity>
-                        <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotoMedidor')}>
-                          <Ionicons name="close-circle" size={24} color={colors.error} />
-                        </TouchableOpacity>
-                      </View>
-                    ) : (
-                      <TouchableOpacity style={styles.addPhotoLarge} onPress={() => handlePickImage('fotoMedidor')}>
-                        <Ionicons name="camera" size={32} color={colors.textSecondary} />
-                        <Text style={styles.addPhotoText}>Subir Foto</Text>
-                      </TouchableOpacity>
-                    )}
-                  </View>
-
-                  <View style={styles.photoField}>
-                    <Text style={styles.label}>Foto Sector del Medidor Eléctrico</Text>
-                    {fotoSectorMedidor ? (
-                      <View style={styles.photoThumbContainer}>
-                        <TouchableOpacity onPress={() => setPreviewUri(fotoSectorMedidor)}>
-                          <Image source={{ uri: fotoSectorMedidor }} style={styles.photoFull} />
-                        </TouchableOpacity>
-                        <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotoSectorMedidor')}>
-                          <Ionicons name="close-circle" size={24} color={colors.error} />
-                        </TouchableOpacity>
-                      </View>
-                    ) : (
-                      <TouchableOpacity style={styles.addPhotoLarge} onPress={() => handlePickImage('fotoSectorMedidor')}>
-                        <Ionicons name="camera" size={32} color={colors.textSecondary} />
-                        <Text style={styles.addPhotoText}>Subir Foto</Text>
-                      </TouchableOpacity>
-                    )}
-                  </View>
-
-                  <Text style={styles.label}>N° Medidor Eléctrico</Text>
-                  <TextInput
-                    style={styles.input}
-                    placeholder="Número de medidor"
-                    value={numeroMedidor}
-                    onChangeText={setNumeroMedidor}
-                    keyboardType="numeric"
-                  />
-
-                  <Text style={styles.label}>Lectura o Consumo Medidor Eléctrico KW_h</Text>
-                  <TextInput
-                    style={styles.input}
-                    placeholder="Lectura actual"
-                    value={lecturaConsumo}
-                    onChangeText={setLecturaConsumo}
-                    keyboardType="numeric"
-                  />
+                <View style={styles.menuItemText}>
+                  <Text style={styles.menuItemTitle}>Hallazgos Previos</Text>
+                  <Text style={styles.menuItemSub}>{fotos.length} fotos capturadas</Text>
                 </View>
-              )}
-            </View>
-
-            <View style={[styles.folderSection, { marginTop: 16 }]}>
-              {/* Header clicable Apagado de 3G 1900MHz */}
-              {(() => {
-                const is3GCompleted = (() => {
-                  if (estado3G === 'Encendido') {
-                    if (!fotoEquipo3GEncendido || !fotoBreaker3GEncendido || !seApagara3G) return false;
-                    if (seApagara3G === 'Si' && (!fotoBreaker3GApagado || !fotoEquipo3GApagado || !fotoEspacioRetirado)) return false;
-                    return true;
-                  }
-                  if (estado3G === 'Apagado') {
-                    if (!seRetirara3G) return false;
-                    if (seRetirara3G === 'Si' && (!fotoBreaker3GApagado || !fotoEquipo3GApagado || !fotoEspacioRetirado)) return false;
-                    return true;
-                  }
-                  if (estado3G === 'N/A') return !!fotoEspacioRetirado;
-                  return false;
-                })();
-
-                const isRRUCompleted = (() => {
-                  if (estadoRRU === 'Encendido') {
-                    if (!fotoRRUEncendido || !seApagaraRRU) return false;
-                    if (seApagaraRRU === 'Si' && !fotoRRUApagado) return false;
-                    return true;
-                  }
-                  if (estadoRRU === 'Apagado') return !!fotoRRUApagado;
-                  if (estadoRRU === 'N/A') return true;
-                  return false;
-                })();
-
-                let completedCount = 0;
-                if (is3GCompleted) completedCount++;
-                if (isRRUCompleted && is3GCompleted) completedCount++;
-                const progress = Math.round((completedCount / 2) * 100);
-                
-                let color = colors.error;
-                if (progress === 100) color = colors.success;
-                else if (progress > 0) color = '#FFA500';
-                
-                return (
-                  <TouchableOpacity style={styles.folderHeader} onPress={toggleApagado} activeOpacity={0.7}>
-                    <View style={styles.folderHeaderLeft}>
-                      <Ionicons name={isApagadoOpen ? 'folder-open' : 'folder'} size={24} color={color} />
-                      <Text style={[styles.folderTitle, { color }]}>Apagado de 3G 1900MHz ({progress}%)</Text>
-                    </View>
-                    <Ionicons
-                      name={isApagadoOpen ? 'chevron-up' : 'chevron-down'}
-                      size={20}
-                      color={colors.textSecondary}
-                    />
-                  </TouchableOpacity>
-                );
-              })()}
-              {/* Contenido expandible Apagado */}
-              {isApagadoOpen && (
-                <View style={styles.folderBody}>
-                  <SelectDropdown 
-                    label="Estado Inicial Equipo 3G1900" 
-                    value={estado3G} 
-                    options={estadoEquipoOptions} 
-                    onSelect={handleEstado3GChange} 
-                  />
-
-                  {estado3G === 'Encendido' && (
-                    <View>
-                      <View style={styles.photoField}>
-                        <Text style={styles.label}>Foto de Equipo 3G1900 Encendido</Text>
-                        {fotoEquipo3GEncendido ? (
-                          <View style={styles.photoThumbContainer}>
-                            <TouchableOpacity onPress={() => setPreviewUri(fotoEquipo3GEncendido)}>
-                              <Image source={{ uri: fotoEquipo3GEncendido }} style={styles.photoFull} />
-                            </TouchableOpacity>
-                            <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotoEquipo3GEncendido')}>
-                              <Ionicons name="close-circle" size={24} color={colors.error} />
-                            </TouchableOpacity>
-                          </View>
-                        ) : (
-                          <TouchableOpacity style={styles.addPhotoLarge} onPress={() => handlePickImage('fotoEquipo3GEncendido')}>
-                            <Ionicons name="camera" size={32} color={colors.textSecondary} />
-                            <Text style={styles.addPhotoText}>Subir Foto</Text>
-                          </TouchableOpacity>
-                        )}
-                      </View>
-
-                      <View style={styles.photoField}>
-                        <Text style={styles.label}>Foto de Breaker 3G1900 Encendido</Text>
-                        {fotoBreaker3GEncendido ? (
-                          <View style={styles.photoThumbContainer}>
-                            <TouchableOpacity onPress={() => setPreviewUri(fotoBreaker3GEncendido)}>
-                              <Image source={{ uri: fotoBreaker3GEncendido }} style={styles.photoFull} />
-                            </TouchableOpacity>
-                            <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotoBreaker3GEncendido')}>
-                              <Ionicons name="close-circle" size={24} color={colors.error} />
-                            </TouchableOpacity>
-                          </View>
-                        ) : (
-                          <TouchableOpacity style={styles.addPhotoLarge} onPress={() => handlePickImage('fotoBreaker3GEncendido')}>
-                            <Ionicons name="camera" size={32} color={colors.textSecondary} />
-                            <Text style={styles.addPhotoText}>Subir Foto</Text>
-                          </TouchableOpacity>
-                        )}
-                      </View>
-                    </View>
-                  )}
-
-                  {( (estado3G === 'Encendido' && seApagara3G === 'Si') || (estado3G === 'Apagado' && seRetirara3G === 'Si') ) && (
-                    <View>
-                      <View style={styles.photoField}>
-                        <Text style={styles.label}>Foto de Breaker 3G1900 Apagado</Text>
-                        {fotoBreaker3GApagado ? (
-                          <View style={styles.photoThumbContainer}>
-                            <TouchableOpacity onPress={() => setPreviewUri(fotoBreaker3GApagado)}>
-                              <Image source={{ uri: fotoBreaker3GApagado }} style={styles.photoFull} />
-                            </TouchableOpacity>
-                            <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotoBreaker3GApagado')}>
-                              <Ionicons name="close-circle" size={24} color={colors.error} />
-                            </TouchableOpacity>
-                          </View>
-                        ) : (
-                          <TouchableOpacity style={styles.addPhotoLarge} onPress={() => handlePickImage('fotoBreaker3GApagado')}>
-                            <Ionicons name="camera" size={32} color={colors.textSecondary} />
-                            <Text style={styles.addPhotoText}>Subir Foto</Text>
-                          </TouchableOpacity>
-                        )}
-                      </View>
-
-                      <View style={styles.photoField}>
-                        <Text style={styles.label}>Foto de Equipo 3G1900 Apagado</Text>
-                        {fotoEquipo3GApagado ? (
-                          <View style={styles.photoThumbContainer}>
-                            <TouchableOpacity onPress={() => setPreviewUri(fotoEquipo3GApagado)}>
-                              <Image source={{ uri: fotoEquipo3GApagado }} style={styles.photoFull} />
-                            </TouchableOpacity>
-                            <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotoEquipo3GApagado')}>
-                              <Ionicons name="close-circle" size={24} color={colors.error} />
-                            </TouchableOpacity>
-                          </View>
-                        ) : (
-                          <TouchableOpacity style={styles.addPhotoLarge} onPress={() => handlePickImage('fotoEquipo3GApagado')}>
-                            <Ionicons name="camera" size={32} color={colors.textSecondary} />
-                            <Text style={styles.addPhotoText}>Subir Foto</Text>
-                          </TouchableOpacity>
-                        )}
-                      </View>
-                    </View>
-                  )}
-
-                  {( (estado3G === 'Encendido' && seApagara3G === 'Si') || (estado3G === 'Apagado' && seRetirara3G === 'Si') || (estado3G === 'N/A') ) && (
-                    <View style={styles.photoField}>
-                      <Text style={styles.label}>Foto de Espacio de Equipo 3G1900 Retirado</Text>
-                      {fotoEspacioRetirado ? (
-                        <View style={styles.photoThumbContainer}>
-                          <TouchableOpacity onPress={() => setPreviewUri(fotoEspacioRetirado)}>
-                            <Image source={{ uri: fotoEspacioRetirado }} style={styles.photoFull} />
-                          </TouchableOpacity>
-                          <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotoEspacioRetirado')}>
-                            <Ionicons name="close-circle" size={24} color={colors.error} />
-                          </TouchableOpacity>
-                        </View>
-                      ) : (
-                        <TouchableOpacity style={styles.addPhotoLarge} onPress={() => handlePickImage('fotoEspacioRetirado')}>
-                          <Ionicons name="camera" size={32} color={colors.textSecondary} />
-                          <Text style={styles.addPhotoText}>Subir Foto</Text>
-                        </TouchableOpacity>
-                      )}
-                    </View>
-                  )}
-                  
-                  {/* El selector de RRU solo aparece si 3G está completado */}
-                  {(() => {
-                    if (estado3G === 'Encendido') {
-                      if (!fotoEquipo3GEncendido || !fotoBreaker3GEncendido || !seApagara3G) return false;
-                      if (seApagara3G === 'Si' && (!fotoBreaker3GApagado || !fotoEquipo3GApagado || !fotoEspacioRetirado)) return false;
-                      return true;
-                    }
-                    if (estado3G === 'Apagado') {
-                      if (!seRetirara3G) return false;
-                      if (seRetirara3G === 'Si' && (!fotoBreaker3GApagado || !fotoEquipo3GApagado || !fotoEspacioRetirado)) return false;
-                      return true;
-                    }
-                    if (estado3G === 'N/A') return !!fotoEspacioRetirado;
-                    return false;
-                  })() && (
-                    <View style={{ marginTop: 24, borderTopWidth: 1, borderTopColor: colors.border, paddingTop: 16 }}>
-                      <SelectDropdown 
-                        label="Estado Inicial Equipo RRU" 
-                        value={estadoRRU} 
-                        options={estadoEquipoOptions} 
-                        onSelect={handleEstadoRRUChange} 
-                      />
-
-                      {estadoRRU === 'Encendido' && (
-                        <View style={styles.photoField}>
-                          <Text style={styles.label}>Foto de Breakers RRU Encendidos</Text>
-                          {fotoRRUEncendido ? (
-                            <View style={styles.photoThumbContainer}>
-                              <TouchableOpacity onPress={() => setPreviewUri(fotoRRUEncendido)}>
-                                <Image source={{ uri: fotoRRUEncendido }} style={styles.photoFull} />
-                              </TouchableOpacity>
-                              <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotoRRUEncendido')}>
-                                <Ionicons name="close-circle" size={24} color={colors.error} />
-                              </TouchableOpacity>
-                            </View>
-                          ) : (
-                            <TouchableOpacity style={styles.addPhotoLarge} onPress={() => handlePickImage('fotoRRUEncendido')}>
-                              <Ionicons name="camera" size={32} color={colors.textSecondary} />
-                              <Text style={styles.addPhotoText}>Subir Foto</Text>
-                            </TouchableOpacity>
-                          )}
-                        </View>
-                      )}
-
-                      {( (estadoRRU === 'Encendido' && seApagaraRRU === 'Si') || (estadoRRU === 'Apagado') ) && (
-                        <View style={styles.photoField}>
-                          <Text style={styles.label}>Foto de Breakers RRU Apagados</Text>
-                          {fotoRRUApagado ? (
-                            <View style={styles.photoThumbContainer}>
-                              <TouchableOpacity onPress={() => setPreviewUri(fotoRRUApagado)}>
-                                <Image source={{ uri: fotoRRUApagado }} style={styles.photoFull} />
-                              </TouchableOpacity>
-                              <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotoRRUApagado')}>
-                                <Ionicons name="close-circle" size={24} color={colors.error} />
-                              </TouchableOpacity>
-                            </View>
-                          ) : (
-                            <TouchableOpacity style={styles.addPhotoLarge} onPress={() => handlePickImage('fotoRRUApagado')}>
-                              <Ionicons name="camera" size={32} color={colors.textSecondary} />
-                              <Text style={styles.addPhotoText}>Subir Foto</Text>
-                            </TouchableOpacity>
-                          )}
-                        </View>
-                      )}
-                    </View>
-                  )}
+                <View style={styles.menuItemRight}>
+                  <Ionicons name="chevron-forward" size={18} color="rgba(255, 255, 255, 0.3)" />
                 </View>
+              </TouchableOpacity>
+
+              <TouchableOpacity style={styles.menuItem} onPress={() => setActiveFolder('datos')} activeOpacity={0.7}>
+                <View style={[styles.menuIconContainer, { backgroundColor: '#007AFF20' }]}>
+                  <Ionicons name="list" size={24} color="#007AFF" />
+                </View>
+                <View style={styles.menuItemText}>
+                  <Text style={styles.menuItemTitle}>Datos Generales</Text>
+                  <Text style={styles.menuItemSub}>Formulario técnico</Text>
+                </View>
+                <View style={styles.menuItemRight}>
+                  <Text style={[styles.menuProgressText, { color: calculateDatosProgress() === 100 ? colors.success : '#007AFF' }]}>
+                    {calculateDatosProgress()}%
+                  </Text>
+                  <Ionicons name="chevron-forward" size={18} color="rgba(255, 255, 255, 0.3)" />
+                </View>
+              </TouchableOpacity>
+
+              <TouchableOpacity style={styles.menuItem} onPress={() => setActiveFolder('apagado')} activeOpacity={0.7}>
+                <View style={[styles.menuIconContainer, { backgroundColor: '#5856D620' }]}>
+                  <Ionicons name="power" size={24} color="#5856D6" />
+                </View>
+                <View style={styles.menuItemText}>
+                  <Text style={styles.menuItemTitle}>Apagado 3G / RRU</Text>
+                  <Text style={styles.menuItemSub}>Validación de equipos</Text>
+                </View>
+                <View style={styles.menuItemRight}>
+                  <Text style={[styles.menuProgressText, { color: calculateApagadoProgress() === 100 ? colors.success : '#5856D6' }]}>
+                    {calculateApagadoProgress()}%
+                  </Text>
+                  <Ionicons name="chevron-forward" size={18} color="rgba(255, 255, 255, 0.3)" />
+                </View>
+              </TouchableOpacity>
+
+              {planning.status === 'Ejecutado' ? (
+                (context?.currentUser?.role === 'Administrador' || context?.currentUser?.role === 'Coordinador') && (
+                  <TouchableOpacity style={[styles.finalButtonDashboard, { backgroundColor: colors.warning }]} onPress={handleReopen}>
+                    <Text style={styles.finalButtonText}>Reabrir Actividad</Text>
+                  </TouchableOpacity>
+                )
+              ) : (
+                calculateDatosProgress() === 100 && calculateApagadoProgress() === 100 && (
+                  <TouchableOpacity style={styles.finalButtonDashboard} onPress={handleFinalize}>
+                    <Text style={styles.finalButtonText}>Finalizar Actividad</Text>
+                  </TouchableOpacity>
+                )
               )}
-            </View>
           </View>
-        )}
-
-      </ScrollView>
-    </SafeAreaView>
+        </View>
+      )}
+    </View>
+  </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
+  formSubHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.05)',
+    marginBottom: 12,
+  },
+  formBackBtn: {
+    padding: 8,
+    marginLeft: -8,
+  },
+  formSubTitle: {
+    color: '#fff',
+    fontSize: 18,
+    fontWeight: 'bold',
+  },
   container: {
     flex: 1,
-    backgroundColor: colors.background,
+    backgroundColor: '#000',
   },
   header: {
     flexDirection: 'row',
@@ -1330,253 +1590,588 @@ const styles = StyleSheet.create({
     backgroundColor: '#4285F4', // Google Maps Blue
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    padding: 12,
-    borderRadius: 8,
-    gap: 8,
-  },
-  mapsBtnText: {
-    color: colors.surface,
-    fontWeight: 'bold',
-    fontSize: 16,
-  },
-  subtitle: {
-    fontSize: 16,
-    color: colors.textSecondary,
-    marginBottom: 24,
-    textAlign: 'center',
-    marginTop: 40,
-  },
-  iniciarBtn: {
-    backgroundColor: colors.success,
-    flexDirection: 'row',
-    padding: 16,
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    marginTop: 20,
-  },
-  iniciarBtnText: {
-    color: colors.surface,
     fontSize: 18,
     fontWeight: 'bold',
-  },
-  enEjecucionContainer: {
-    marginTop: 8,
-  },
-  statusBadge: {
-    backgroundColor: colors.primary,
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 20,
-    alignSelf: 'flex-start',
-    marginBottom: 24,
-    gap: 6,
-  },
-  statusBadgeText: {
-    color: colors.surface,
-    fontWeight: 'bold',
-    fontSize: 14,
-  },
-  folderSection: {
-    backgroundColor: colors.surface,
-    padding: 16,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  folderHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 4,
-  },
-  folderHeaderLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    flex: 1,
-  },
-  folderBody: {
-    marginTop: 16,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-    paddingTop: 12,
-  },
-  folderTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: colors.text,
-  },
-  fotoBadge: {
-    backgroundColor: colors.primary,
-    borderRadius: 10,
-    minWidth: 20,
-    height: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 5,
-  },
-  fotoBadgeText: {
     color: '#fff',
-    fontSize: 11,
-    fontWeight: 'bold',
   },
-  label: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: colors.text,
-    marginBottom: 8,
-    marginTop: 8,
-  },
-  input: {
-    backgroundColor: colors.background,
-    borderWidth: 1,
-    borderColor: colors.border,
-    padding: 12,
-    borderRadius: 8,
-    fontSize: 16,
-    marginBottom: 16,
-  },
-  textArea: {
-    minHeight: 100,
-  },
-  photoGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 12,
-    marginTop: 8,
-  },
-  photoThumbContainer: {
-    position: 'relative',
-  },
-  photoThumb: {
-    width: 80,
-    height: 80,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  deletePhotoBtn: {
-    position: 'absolute',
-    top: -10,
-    right: -10,
-    backgroundColor: colors.surface,
-    borderRadius: 12,
-  },
-  addPhotoBox: {
-    width: 80,
-    height: 80,
-    backgroundColor: colors.background,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderStyle: 'dashed',
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  addPhotoText: {
-    fontSize: 12,
-    color: colors.textSecondary,
-    marginTop: 4,
-  },
-  saveBtn: {
-    backgroundColor: colors.primary,
-    padding: 16,
-    borderRadius: 8,
-    alignItems: 'center',
-    marginTop: 32,
-  },
-  saveBtnText: {
-    color: colors.surface,
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
-  processingText: {
-    color: colors.primary,
-    fontSize: 13,
-    marginBottom: 8,
-    fontStyle: 'italic',
-  },
-  processingOverlay: {
+  mainContainer: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+  },
+  backgroundLayer: {
+    flex: 1,
+    zIndex: 1,
+  },
+  mapContainer: {
+    flex: 1,
+    backgroundColor: '#1C1C1E',
     justifyContent: 'center',
     alignItems: 'center',
   },
-  processingCard: {
-    backgroundColor: colors.surface,
-    padding: 24,
-    borderRadius: 16,
+  mockMap: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#1C1C1E',
+    justifyContent: 'center',
     alignItems: 'center',
-    width: '80%',
+  },
+  mapMarker: {
+    width: 40,
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  markerDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: colors.primary,
+    zIndex: 2,
+  },
+  markerPulse: {
+    position: 'absolute',
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: colors.primary + '40',
+    borderWidth: 1,
+    borderColor: colors.primary,
+  },
+  siteInfoOverlay: {
+    position: 'absolute',
+    top: 50,
+    left: 20,
+    right: 20,
+    backgroundColor: 'rgba(28, 28, 30, 0.95)',
+    borderRadius: 24,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 8,
     elevation: 10,
   },
-  processingTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: colors.text,
-    marginTop: 16,
+  overlayHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
     marginBottom: 8,
   },
-  processingSubtitle: {
+  overlayTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#fff',
+    flex: 1,
+  },
+  overlayCloseBtn: {
+    padding: 4,
+  },
+  totalProgressBox: {
+    marginTop: 12,
+  },
+  totalProgressHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  totalProgressLabel: {
+    color: 'rgba(255, 255, 255, 0.5)',
+    fontSize: 12,
+    fontWeight: '600',
+    textTransform: 'uppercase',
+  },
+  totalProgressPercent: {
+    color: '#fff',
     fontSize: 14,
-    color: colors.textSecondary,
+    fontWeight: 'bold',
+  },
+  totalProgressBarBg: {
+    height: 6,
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: 3,
+    overflow: 'hidden',
+  },
+  totalProgressBarFill: {
+    height: '100%',
+    borderRadius: 3,
+  },
+  overlayRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 12,
+    gap: 4,
+  },
+  overlaySub: {
+    fontSize: 14,
+    color: 'rgba(255, 255, 255, 0.5)',
+  },
+  miniMapsBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.primary + '20',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 12,
+    marginTop: 20,
+    alignSelf: 'flex-start',
+    gap: 8,
+  },
+  miniMapsBtnText: {
+    color: colors.primary,
+    fontWeight: 'bold',
+    fontSize: 15,
+  },
+  formContainer: {
+    flex: 1,
+    backgroundColor: '#000',
+  },
+  formScrollContent: {
+    padding: 20,
+    paddingBottom: 250,
+  },
+  sectionProgressContainer: {
+    backgroundColor: 'rgba(255, 255, 255, 0.03)',
+    padding: 16,
+    borderRadius: 12,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.05)',
+  },
+  sectionProgressTitle: {
+    color: 'rgba(255, 255, 255, 0.5)',
+    fontSize: 12,
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+    marginBottom: 10,
+  },
+  progressRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  sectionProgressBarBg: {
+    flex: 1,
+    height: 6,
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: 3,
+    overflow: 'hidden',
+  },
+  sectionProgressBarFill: {
+    height: '100%',
+    borderRadius: 3,
+  },
+  sectionProgressPercent: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
+    width: 45,
+    textAlign: 'right',
+  },
+  sectionProgressText: {
+    color: 'rgba(255, 255, 255, 0.4)',
+    fontSize: 13,
+    fontStyle: 'italic',
+  },
+  subViewTitle: {
+    fontSize: 34,
+    fontWeight: 'bold',
+    color: '#fff',
+    marginBottom: 24,
+    letterSpacing: -1,
+  },
+  formSection: {
+    backgroundColor: '#1C1C1E',
+    borderRadius: 20,
+    padding: 20,
+    marginBottom: 20,
+  },
+  bottomPanel: {
+    position: 'absolute',
+    top: 200,
+    bottom: 30,
+    left: 12,
+    right: 12,
+    backgroundColor: 'rgba(28, 28, 30, 0.98)',
+    borderRadius: 32,
+    paddingTop: 12,
+    paddingHorizontal: 20,
+    paddingBottom: 20,
+    zIndex: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.5,
+    shadowRadius: 20,
+    elevation: 20,
+  },
+  panelCollapsed: {
+    height: SCREEN_WIDTH > 400 ? 550 : 450,
+  },
+  panelHandle: {
+    width: 40,
+    height: 5,
+    borderRadius: 2.5,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    alignSelf: 'center',
+    marginBottom: 20,
+  },
+  panelContent: {
+    flex: 1,
+  },
+  panelTitle: {
+    fontSize: 22,
+    fontWeight: 'bold',
+    color: '#fff',
+    marginBottom: 20,
+  },
+  menuItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 12,
+  },
+  menuIconContainer: {
+    width: 44,
+    height: 44,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 16,
+  },
+  menuItemText: {
+    flex: 1,
+  },
+  menuItemTitle: {
+    fontSize: 17,
+    fontWeight: '600',
+    color: '#fff',
+  },
+  menuItemSub: {
+    fontSize: 13,
+    color: 'rgba(255, 255, 255, 0.4)',
+    marginTop: 2,
+  },
+  menuItemRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  menuProgressText: {
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  finalButtonDashboard: {
+    backgroundColor: colors.success,
+    paddingVertical: 16,
+    borderRadius: 16,
+    alignItems: 'center',
+    marginTop: 12,
+  },
+  finalButtonText: {
+    color: '#fff',
+    fontSize: 17,
+    fontWeight: 'bold',
+  },
+  navPanel: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    height: 50,
+  },
+  backNavBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  backNavText: {
+    color: colors.primary,
+    fontSize: 17,
+    fontWeight: '600',
+  },
+  navPanelTitle: {
+    fontSize: 17,
+    fontWeight: 'bold',
+    color: '#fff',
+    marginRight: 10,
+  },
+  label: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: 'rgba(255, 255, 255, 0.6)',
+    marginBottom: 4,
+    marginTop: 20,
+  },
+  input: {
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderRadius: 12,
+    padding: 16,
+    color: '#fff',
+    fontSize: 17,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+  },
+  textArea: {
+    height: 120,
+    textAlignVertical: 'top',
+  },
+  photoGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+    marginTop: 12,
+  },
+  photoThumbContainer: {
+    position: 'relative',
+    width: (SCREEN_WIDTH - 80) / 3,
+    aspectRatio: 1,
+  },
+  photoThumb: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 12,
+  },
+  deletePhotoBtn: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    backgroundColor: 'rgba(0, 0, 0, 0.4)',
+    borderRadius: 14,
+    zIndex: 10,
+    padding: 2,
+  },
+  addPhotoBox: {
+    width: (SCREEN_WIDTH - 80) / 3,
+    aspectRatio: 1,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+    borderStyle: 'dashed',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  // Processing Overlay
+  processingOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 1000,
+  },
+  processingCard: {
+    backgroundColor: '#1C1C1E',
+    padding: 30,
+    borderRadius: 20,
+    alignItems: 'center',
+    width: '80%',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+  },
+  processingTitle: {
+    color: '#fff',
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginTop: 20,
+    textAlign: 'center',
+  },
+  processingSubtitle: {
+    color: 'rgba(255,255,255,0.5)',
+    fontSize: 14,
+    marginTop: 8,
     textAlign: 'center',
   },
   photoField: {
-    marginBottom: 16,
+    marginTop: 4,
+    marginBottom: 24,
+  },
+  photoFullContainer: {
+    width: '100%',
+    height: 200,
+    borderRadius: 16,
+    overflow: 'hidden',
+    backgroundColor: '#000',
+    position: 'relative',
   },
   photoFull: {
     width: '100%',
-    height: 180,
-    borderRadius: 8,
-    backgroundColor: colors.background,
+    height: '100%',
   },
   addPhotoLarge: {
     width: '100%',
-    height: 120,
-    backgroundColor: colors.background,
+    height: 140,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderRadius: 16,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
     borderStyle: 'dashed',
-    borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
   },
+  addPhotoText: {
+    color: 'rgba(255, 255, 255, 0.4)',
+    fontSize: 15,
+  },
   photoRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginBottom: 16,
+    marginTop: 12,
   },
   photoCol: {
-    alignItems: 'center',
-    width: '30%',
+    width: '48%',
+    aspectRatio: 1,
   },
   smallLabel: {
-    fontSize: 12,
-    color: colors.textSecondary,
-    marginBottom: 4,
+    fontSize: 13,
+    color: 'rgba(255, 255, 255, 0.4)',
+    marginBottom: 6,
+    textAlign: 'center',
   },
-  // ViewShot fuera de pantalla (invisible pero renderizable)
+  ampereDisplay: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(10, 132, 255, 0.1)',
+    padding: 12,
+    borderRadius: 12,
+    marginTop: 12,
+    gap: 8,
+    justifyContent: 'center',
+  },
+  ampereText: {
+    color: colors.primary,
+    fontSize: 17,
+    fontWeight: 'bold',
+  },
+  ampereDisplayMini: {
+    backgroundColor: 'rgba(10, 132, 255, 0.1)',
+    padding: 6,
+    borderRadius: 8,
+    marginTop: 8,
+    alignItems: 'center',
+  },
+  ampereTextSmall: {
+    color: colors.primary,
+    fontSize: 13,
+    fontWeight: 'bold',
+  },
+  statusBadgeSmall: {
+    backgroundColor: 'rgba(10, 132, 255, 0.15)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    marginTop: 4,
+    alignSelf: 'flex-start',
+  },
+  statusBadgeTextSmall: {
+    color: '#0A84FF',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  // Preview modal
+  previewOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.95)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  previewImage: {
+    width: SCREEN_WIDTH,
+    height: SCREEN_WIDTH * 0.75,
+  },
+  previewCloseBtn: {
+    position: 'absolute',
+    top: 50,
+    right: 20,
+    zIndex: 10,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContent: {
+    backgroundColor: '#1C1C1E',
+    width: '85%',
+    borderRadius: 20,
+    padding: 24,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#fff',
+    marginBottom: 8,
+  },
+  modalSubtitle: {
+    fontSize: 14,
+    color: 'rgba(255,255,255,0.5)',
+    textAlign: 'center',
+    marginBottom: 24,
+  },
+  ampereInputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#000',
+    borderRadius: 16,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    marginBottom: 30,
+    width: '100%',
+  },
+  ampereInput: {
+    flex: 1,
+    fontSize: 42,
+    fontWeight: 'bold',
+    color: colors.primary,
+    textAlign: 'center',
+  },
+  ampereUnit: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: 'rgba(255,255,255,0.3)',
+    marginLeft: 10,
+  },
+  modalButtons: {
+    flexDirection: 'row',
+    gap: 12,
+    width: '100%',
+  },
+  modalBtn: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  modalBtnCancel: {
+    backgroundColor: 'rgba(255,255,255,0.1)',
+  },
+  modalBtnConfirm: {
+    backgroundColor: colors.primary,
+  },
+  modalBtnText: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#fff',
+  },
+  // ViewShot
   offscreen: {
     position: 'absolute',
-    top: -2000,
-    left: 0,
-    opacity: 0,
-    zIndex: -1,
+    top: -4000, // Much further away
+    left: -4000,
+    width: SCREEN_WIDTH,
+    height: (SCREEN_WIDTH * 9) / 16,
+    zIndex: -100,
+    opacity: 0.01, // Almost invisible
   },
   watermarkContainer: {
     width: SCREEN_WIDTH,
-    aspectRatio: 16 / 9,
+    height: (SCREEN_WIDTH * 9) / 16,
+    backgroundColor: '#000',
     overflow: 'hidden',
   },
   watermarkImage: {
@@ -1588,9 +2183,9 @@ const styles = StyleSheet.create({
     bottom: 0,
     left: 0,
     right: 0,
-    backgroundColor: 'transparent',
     paddingHorizontal: 12,
     paddingVertical: 8,
+    backgroundColor: 'rgba(0,0,0,0.4)',
   },
   watermarkRow: {
     flexDirection: 'row',
@@ -1626,33 +2221,80 @@ const styles = StyleSheet.create({
   watermarkLogo: {
     width: 40,
     height: 40,
-    opacity: 0.5,
-    marginLeft: 8,
+    opacity: 0.6,
   },
-  // Preview modal
-  previewOverlay: {
+  modalActions: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 20,
+  },
+  modalBtn: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.95)',
-    justifyContent: 'center',
+    height: 48,
+    borderRadius: 12,
     alignItems: 'center',
+    justifyContent: 'center',
   },
-  previewImage: {
-    width: SCREEN_WIDTH,
-    height: SCREEN_WIDTH * 0.65,
+  modalBtnText: {
+    color: '#fff',
+    fontWeight: '600',
+    fontSize: 16,
   },
-  previewCloseBtn: {
-    position: 'absolute',
-    top: 50,
-    right: 20,
-    zIndex: 10,
+  trifasicoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.03)',
+    padding: 12,
+    borderRadius: 16,
+    marginBottom: 12,
+    gap: 16,
   },
-  // Zoom hint badge
-  zoomHint: {
-    position: 'absolute',
-    bottom: 4,
-    right: 4,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    borderRadius: 4,
-    padding: 2,
+  trifasicoPhotoCol: {
+    width: 90,
+    height: 90,
+  },
+  trifasicoPhotoWrapper: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 12,
+    overflow: 'hidden',
+    position: 'relative',
+    backgroundColor: '#000',
+  },
+  trifasicoAddBox: {
+    width: '100%',
+    height: '100%',
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+    borderStyle: 'dashed',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  trifasicoInfoCol: {
+    flex: 1,
+    justifyContent: 'center',
+    gap: 6,
+  },
+  trifasicoLabel: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: 'bold',
+  },
+  ampereDisplayTrifasico: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(10, 132, 255, 0.1)',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 10,
+    gap: 8,
+    alignSelf: 'flex-start',
+  },
+  ampereTextTrifasico: {
+    color: colors.primary,
+    fontSize: 16,
+    fontWeight: 'bold',
   },
 });

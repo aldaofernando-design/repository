@@ -1,9 +1,16 @@
-import React, { useContext, useState } from 'react';
-import { View, StyleSheet, SafeAreaView, Text, FlatList, TouchableOpacity } from 'react-native';
+import React, { useContext, useState, useRef } from 'react';
+import { View, StyleSheet, Text, Dimensions, Animated, TouchableOpacity, FlatList } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Calendar, LocaleConfig } from 'react-native-calendars';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../theme/colors';
 import { AppContext } from '../context/AppContext';
+import { getElapsedTime, formatTime } from '../services/timeUtils';
+
+const { height: screenHeight, width: screenWidth } = Dimensions.get('window');
+const SHEET_MIN_HEIGHT = 110;
+const SHEET_MID_HEIGHT = 450;
+const SHEET_MAX_HEIGHT = 450; // Para el calendario no necesitamos que suba tanto si solo es el calendario
 
 // Configurar calendario en español
 LocaleConfig.locales['es'] = {
@@ -18,109 +25,154 @@ LocaleConfig.defaultLocale = 'es';
 export const CalendarioScreen = ({ navigation }: any) => {
   const context = useContext(AppContext);
   const currentUser = context?.currentUser;
-  
   const allPlannings = context?.plannings || [];
   const allSites = context?.sites || [];
 
-  // Fecha actual YYYY-MM-DD
   const today = new Date();
   const todayString = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-
   const [selectedDate, setSelectedDate] = useState(todayString);
 
-  // Filtrar planificaciones del trabajador, que sean Planificadas y fecha >= hoy
-  const workerPlannings = allPlannings.filter(p => {
-    if (p.workerId !== currentUser?.id) return false;
-    if (p.status !== 'Planificado') return false;
-    // Solo mostrar fecha actual o futura (comparación string simple funciona para YYYY-MM-DD)
-    if (p.date < todayString) return false; 
-    return true;
+  // Animación del Bottom Sheet (Contiene el Calendario)
+  const [sheetState, setSheetState] = useState<'hidden' | 'half'>('half');
+  const sheetHeight = useRef(new Animated.Value(SHEET_MID_HEIGHT)).current;
+
+  const contentOpacity = sheetHeight.interpolate({
+    inputRange: [SHEET_MIN_HEIGHT, SHEET_MIN_HEIGHT + 80],
+    outputRange: [0, 1],
+    extrapolate: 'clamp',
   });
 
-  // Crear objeto markedDates para el calendario
+  // Filtrar planificaciones del trabajador (Planificado o En ejecución)
+  const workerPlannings = allPlannings.filter(p => 
+    p.workerId === currentUser?.id && 
+    (p.status === 'Planificado' || p.status === 'En ejecución' || p.status === 'Ejecutado')
+  );
+
+  // Marcar fechas en el calendario
   const markedDates: any = {};
   workerPlannings.forEach(p => {
     markedDates[p.date] = { 
       marked: true, 
-      dotColor: colors.primary,
+      dotColor: '#0A84FF',
       selected: p.date === selectedDate,
-      selectedColor: p.date === selectedDate ? colors.primary : undefined,
+      selectedColor: p.date === selectedDate ? '#0A84FF' : undefined,
     };
   });
-
-  // Asegurar que la fecha seleccionada siempre se marque, aunque no tenga planificación
   if (!markedDates[selectedDate]) {
-    markedDates[selectedDate] = { selected: true, selectedColor: colors.primary };
+    markedDates[selectedDate] = { selected: true, selectedColor: '#0A84FF' };
   }
 
-  // Filtrar plannings del día seleccionado
+  // Plannings del día seleccionado
   const planningsForSelectedDate = workerPlannings.filter(p => p.date === selectedDate);
 
-  const renderSiteCard = ({ item }: { item: any }) => {
+  const toggleSheet = () => {
+    let nextState: 'hidden' | 'half' = 'half';
+    let toValue = SHEET_MID_HEIGHT;
+
+    if (sheetState === 'half') {
+      nextState = 'hidden';
+      toValue = SHEET_MIN_HEIGHT;
+    } else {
+      nextState = 'half';
+      toValue = SHEET_MID_HEIGHT;
+    }
+
+    Animated.spring(sheetHeight, {
+      toValue,
+      useNativeDriver: false,
+      friction: 8,
+      tension: 40,
+    }).start();
+    setSheetState(nextState);
+  };
+
+  const renderPlanningItem = ({ item }: { item: any }) => {
     const site = allSites.find(s => s.id === item.siteId);
     if (!site) return null;
 
     return (
       <TouchableOpacity 
-        style={styles.card}
-        onPress={() => navigation.navigate('DetalleActividad', { planningId: item.id })}
+        style={styles.listItem}
+        onPress={() => navigation.navigate('Actividad', { autoSelectSiteId: item.siteId })}
       >
-        <View style={styles.cardHeader}>
-          <Text style={styles.siteCode}>{site.code}</Text>
-          <Text style={styles.siteName}>{site.name}</Text>
+        <View style={[
+          styles.listItemIcon, 
+          { 
+            backgroundColor: item.status === 'Ejecutado' ? colors.success + '15' :
+                            item.status === 'En ejecución' ? 'rgba(255, 149, 0, 0.15)' : 'rgba(10, 132, 255, 0.15)' 
+          }
+        ]}>
+          <Ionicons 
+            name={item.status === 'Ejecutado' ? "checkmark-done-circle" : item.status === 'En ejecución' ? "time" : "calendar"} 
+            size={24} 
+            color={item.status === 'Ejecutado' ? colors.success : item.status === 'En ejecución' ? "#FF9500" : "#0A84FF"} 
+          />
         </View>
-        <View style={styles.cardBody}>
-          <Ionicons name="location-outline" size={16} color={colors.textSecondary} />
-          <Text style={styles.siteAddress}>{site.address}, {site.commune}</Text>
+        <View style={styles.listItemText}>
+          <Text style={styles.listItemTitle}>{site.code} - {site.name}</Text>
+          <Text style={[styles.statusText, { 
+            color: item.status === 'Ejecutado' ? colors.success : item.status === 'En ejecución' ? '#FF9500' : '#0A84FF' 
+          }]}>
+            {item.status === 'Ejecutado' ? `Ejecutado • ${formatTime(item.endTime)}` : 
+             item.status === 'En ejecución' ? `En ejecución • ${getElapsedTime(item.startTime)}` : item.status}
+          </Text>
         </View>
+        <Ionicons name="chevron-forward" size={20} color="rgba(255, 255, 255, 0.3)" />
       </TouchableOpacity>
     );
   };
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.title}>Mi Calendario</Text>
-      </View>
-      
-      <View style={styles.calendarContainer}>
-        <Calendar
-          current={todayString}
-          minDate={todayString}
-          onDayPress={(day: any) => setSelectedDate(day.dateString)}
-          markedDates={markedDates}
-          theme={{
-            backgroundColor: colors.background,
-            calendarBackground: colors.surface,
-            textSectionTitleColor: colors.textSecondary,
-            selectedDayBackgroundColor: colors.primary,
-            selectedDayTextColor: colors.surface,
-            todayTextColor: colors.primary,
-            dayTextColor: colors.text,
-            textDisabledColor: '#d9e1e8',
-            dotColor: colors.primary,
-            selectedDotColor: colors.surface,
-            arrowColor: colors.primary,
-            monthTextColor: colors.text,
-            textDayFontWeight: '500',
-            textMonthFontWeight: 'bold',
-            textDayHeaderFontWeight: '600'
-          }}
-        />
-      </View>
-
-      <View style={styles.agendaContainer}>
-        <Text style={styles.agendaTitle}>Planificadas para el {selectedDate}</Text>
+      <View style={styles.mainContent}>
+        <Text style={styles.headerTitle}>Actividades del día</Text>
+        <Text style={styles.headerSubtitle}>{selectedDate}</Text>
+        
         <FlatList
           data={planningsForSelectedDate}
           keyExtractor={item => item.id}
-          renderItem={renderSiteCard}
-          contentContainerStyle={styles.list}
+          renderItem={renderPlanningItem}
+          contentContainerStyle={styles.listContent}
           ListEmptyComponent={
-            <Text style={styles.emptyText}>No tienes actividades planificadas para este día.</Text>
+            <View style={styles.emptyContainer}>
+              <Ionicons name="calendar-outline" size={60} color="rgba(255, 255, 255, 0.1)" />
+              <Text style={styles.emptyText}>No hay actividades registradas para este día.</Text>
+            </View>
           }
         />
       </View>
+
+      <Animated.View style={[styles.bottomSheet, { height: sheetHeight }]}>
+        <TouchableOpacity style={styles.sheetHandleContainer} onPress={toggleSheet} activeOpacity={1}>
+          <View style={styles.sheetHandle} />
+        </TouchableOpacity>
+
+        <Animated.View style={[styles.sheetContent, { opacity: contentOpacity }]}>
+          <Calendar
+            current={selectedDate}
+            minDate={todayString}
+            onDayPress={(day: any) => setSelectedDate(day.dateString)}
+            markedDates={markedDates}
+            theme={{
+              backgroundColor: 'transparent',
+              calendarBackground: 'transparent',
+              textSectionTitleColor: 'rgba(255, 255, 255, 0.5)',
+              selectedDayBackgroundColor: '#0A84FF',
+              selectedDayTextColor: '#ffffff',
+              todayTextColor: '#0A84FF',
+              dayTextColor: '#ffffff',
+              textDisabledColor: 'rgba(255, 255, 255, 0.2)',
+              dotColor: '#0A84FF',
+              selectedDotColor: '#ffffff',
+              arrowColor: '#0A84FF',
+              monthTextColor: '#ffffff',
+              textDayFontWeight: '500',
+              textMonthFontWeight: 'bold',
+              textDayHeaderFontWeight: '600',
+            }}
+          />
+        </Animated.View>
+      </Animated.View>
     </SafeAreaView>
   );
 };
@@ -128,80 +180,101 @@ export const CalendarioScreen = ({ navigation }: any) => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: colors.background,
+    backgroundColor: '#000',
   },
-  header: {
-    padding: 16,
-    backgroundColor: colors.surface,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-  },
-  title: {
-    fontSize: 22,
-    fontWeight: 'bold',
-    color: colors.text,
-  },
-  calendarContainer: {
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-  },
-  agendaContainer: {
+  mainContent: {
     flex: 1,
-    backgroundColor: colors.background,
+    paddingHorizontal: 25,
+    paddingTop: 20,
   },
-  agendaTitle: {
-    fontSize: 16,
+  headerTitle: {
+    fontSize: 28,
     fontWeight: 'bold',
-    color: colors.text,
-    padding: 16,
-    paddingBottom: 8,
+    color: '#fff',
+    marginBottom: 4,
   },
-  list: {
-    paddingHorizontal: 16,
-    paddingBottom: 24,
+  headerSubtitle: {
+    fontSize: 16,
+    color: 'rgba(255, 255, 255, 0.5)',
+    marginBottom: 30,
+    textTransform: 'capitalize',
   },
-  card: {
-    backgroundColor: colors.surface,
-    padding: 16,
-    borderRadius: 12,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: colors.border,
+  listContent: {
+    paddingBottom: 150, // Espacio para que el panel no tape el último item
   },
-  cardHeader: {
+  listItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 8,
+    paddingVertical: 15,
+    borderBottomWidth: 0.5,
+    borderBottomColor: 'rgba(255, 255, 255, 0.1)',
   },
-  siteCode: {
-    fontSize: 14,
-    fontWeight: 'bold',
-    color: colors.secondary,
-    backgroundColor: colors.background,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
-    marginRight: 8,
+  listItemIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 15,
   },
-  siteName: {
-    fontSize: 16,
+  listItemText: {
+    flex: 1,
+  },
+  listItemTitle: {
+    fontSize: 18,
     fontWeight: '600',
-    color: colors.text,
-    flexShrink: 1,
+    color: '#fff',
+    marginBottom: 2,
   },
-  cardBody: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  siteAddress: {
+  listItemSub: {
     fontSize: 14,
-    color: colors.textSecondary,
-    marginLeft: 4,
+    color: 'rgba(255, 255, 255, 0.5)',
+  },
+  statusText: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#0A84FF',
+    marginTop: 2,
+  },
+  emptyContainer: {
+    marginTop: 80,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   emptyText: {
     textAlign: 'center',
-    color: colors.textSecondary,
-    marginTop: 24,
-    fontSize: 14,
-  }
+    color: 'rgba(255, 255, 255, 0.4)',
+    marginTop: 20,
+    fontSize: 16,
+    paddingHorizontal: 40,
+  },
+  bottomSheet: {
+    position: 'absolute',
+    bottom: 15,
+    left: 15,
+    right: 15,
+    backgroundColor: 'rgba(28, 28, 30, 0.95)',
+    borderRadius: 35,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 10,
+    elevation: 20,
+    overflow: 'hidden',
+  },
+  sheetHandleContainer: {
+    width: '100%',
+    height: 30,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sheetHandle: {
+    width: 36,
+    height: 5,
+    borderRadius: 2.5,
+    backgroundColor: 'rgba(255, 255, 255, 0.3)',
+  },
+  sheetContent: {
+    paddingHorizontal: 10,
+  },
 });

@@ -1,10 +1,12 @@
 import React, { useState, useContext } from 'react';
-import { View, Text, StyleSheet, SafeAreaView, TouchableOpacity, ScrollView, Alert, Platform } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, Platform } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../theme/colors';
 import { AppContext } from '../context/AppContext';
 import { SelectDropdown } from '../components/SelectDropdown';
+import { ConfirmationModal } from '../components/ConfirmationModal';
 
 export const PlanificacionScreen = ({ navigation }: any) => {
   const context = useContext(AppContext);
@@ -14,6 +16,11 @@ export const PlanificacionScreen = ({ navigation }: any) => {
   const [date, setDate] = useState(new Date());
   const [showDatePicker, setShowDatePicker] = useState(false);
 
+  // Modal States
+  const [workerModal, setWorkerModal] = useState<{ visible: boolean, siteId: string, workerId: string }>({ visible: false, siteId: '', workerId: '' });
+  const [dateModal, setDateModal] = useState<{ visible: boolean, planning: any }>({ visible: false, planning: null });
+  const [successModal, setSuccessModal] = useState({ visible: false, message: '' });
+
   // 1. Filter Sites (Status !== Ejecutado)
   const siteStatusMap = context?.plannings.reduce((acc, plan) => {
     acc[plan.siteId] = plan.status;
@@ -21,8 +28,8 @@ export const PlanificacionScreen = ({ navigation }: any) => {
   }, {} as Record<string, string>) || {};
 
   const availableSites = (context?.sites || []).filter(site => {
-    const status = siteStatusMap[site.id] || 'Sin Asignar';
-    return status !== 'Ejecutado';
+    const status = siteStatusMap[site.id] || site.estadoExcel || 'Sin Asignar';
+    return ['Planificado', 'Sin iniciar', 'Sin Asignar', 'Sin asignar', 'En ejecución'].includes(status);
   });
 
   const siteOptions = availableSites.map(s => ({
@@ -46,6 +53,51 @@ export const PlanificacionScreen = ({ navigation }: any) => {
     }
   };
 
+  const handleSiteSelect = (siteId: string) => {
+    const existingPlanning = context?.plannings.find(p => p.siteId === siteId);
+    
+    if (existingPlanning) {
+      if (existingPlanning.workerId) {
+        setWorkerModal({ visible: true, siteId, workerId: existingPlanning.workerId });
+      } else {
+        setSelectedSite(siteId);
+        setSelectedWorker(null); // Resetear trabajador si no tiene asignado
+        checkPlanningDate(existingPlanning);
+      }
+    } else {
+      setSelectedSite(siteId);
+      setSelectedWorker(null); // Resetear trabajador si el sitio es nuevo en planificación
+    }
+  };
+
+  const confirmWorkerChange = () => {
+    const { siteId, workerId } = workerModal;
+    setSelectedSite(siteId);
+    setSelectedWorker(workerId);
+    setWorkerModal({ ...workerModal, visible: false });
+    
+    const existingPlanning = context?.plannings.find(p => p.siteId === siteId);
+    if (existingPlanning) checkPlanningDate(existingPlanning);
+  };
+
+  const checkPlanningDate = (planning: any) => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const [year, month, day] = planning.date.split('-').map(Number);
+    const planDate = new Date(year, month - 1, day);
+
+    if (planDate < today) {
+      setDateModal({ visible: true, planning });
+    } else {
+      setDate(planDate);
+    }
+  };
+
+  const confirmDateUpdate = () => {
+    setDateModal({ ...dateModal, visible: false });
+    setShowDatePicker(true);
+  };
+
   const handlePlanificar = () => {
     if (!selectedSite || !selectedWorker) {
       Alert.alert('Faltan datos', 'Debes seleccionar un sitio y un trabajador.');
@@ -53,21 +105,30 @@ export const PlanificacionScreen = ({ navigation }: any) => {
     }
 
     const dateString = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+    const existingPlanning = context?.plannings.find(p => p.siteId === selectedSite);
 
-    context?.addPlanning({
-      siteId: selectedSite,
-      workerId: selectedWorker,
-      date: dateString,
-      status: 'Planificado'
-    });
+    if (existingPlanning) {
+      context?.updatePlanning(existingPlanning.id, {
+        workerId: selectedWorker,
+        date: dateString,
+        status: 'Planificado'
+      });
+      setSuccessModal({ visible: true, message: 'Planificación actualizada correctamente' });
+    } else {
+      context?.addPlanning({
+        siteId: selectedSite,
+        workerId: selectedWorker,
+        date: dateString,
+        status: 'Planificado'
+      });
+      setSuccessModal({ visible: true, message: 'Actividad planificada correctamente' });
+    }
+  };
 
-    Alert.alert('Éxito', 'Actividad planificada correctamente', [
-      { text: 'OK', onPress: () => {
-        setSelectedSite(null);
-        setSelectedWorker(null);
-        setDate(new Date());
-      }}
-    ]);
+  const resetForm = () => {
+    setSelectedSite(null);
+    setSelectedWorker(null);
+    setDate(new Date());
   };
 
   return (
@@ -79,7 +140,7 @@ export const PlanificacionScreen = ({ navigation }: any) => {
           label="1. Seleccionar Sitio"
           value={selectedSite}
           options={siteOptions}
-          onSelect={setSelectedSite}
+          onSelect={handleSiteSelect}
           placeholder="Toca para elegir un sitio..."
           searchable
         />
@@ -100,7 +161,6 @@ export const PlanificacionScreen = ({ navigation }: any) => {
                 value={date}
                 mode="date"
                 display="default"
-                minimumDate={new Date()}
                 onChange={onChangeDate}
               />
             </View>
@@ -115,7 +175,6 @@ export const PlanificacionScreen = ({ navigation }: any) => {
                   value={date}
                   mode="date"
                   display="default"
-                  minimumDate={new Date()}
                   onChange={onChangeDate}
                 />
               )}
@@ -126,6 +185,47 @@ export const PlanificacionScreen = ({ navigation }: any) => {
         <TouchableOpacity style={styles.submitBtn} onPress={handlePlanificar}>
           <Text style={styles.submitBtnText}>Planificar Actividad</Text>
         </TouchableOpacity>
+
+        {/* Modales Interactivos */}
+        <ConfirmationModal 
+          visible={workerModal.visible}
+          title="Sitio Asignado"
+          message="Este sitio ya tiene un trabajador responsable. ¿Deseas cambiar el responsable?"
+          icon="people-outline"
+          confirmLabel="Sí, cambiar"
+          onConfirm={confirmWorkerChange}
+          onCancel={() => setWorkerModal({ ...workerModal, visible: false })}
+        />
+
+        <ConfirmationModal 
+          visible={dateModal.visible}
+          title="Fecha Desactualizada"
+          message="La fecha de planificación es anterior al día de hoy. ¿Deseas actualizarla?"
+          icon="time-outline"
+          confirmLabel="Sí, actualizar"
+          onConfirm={confirmDateUpdate}
+          onCancel={() => {
+            setDate(new Date(dateModal.planning.date));
+            setDateModal({ ...dateModal, visible: false });
+          }}
+        />
+
+        <ConfirmationModal 
+          visible={successModal.visible}
+          title="Éxito"
+          message={successModal.message}
+          icon="checkmark-circle-outline"
+          confirmLabel="Excelente"
+          cancelLabel="Cerrar"
+          onConfirm={() => {
+            setSuccessModal({ ...successModal, visible: false });
+            resetForm();
+          }}
+          onCancel={() => {
+            setSuccessModal({ ...successModal, visible: false });
+            resetForm();
+          }}
+        />
       </ScrollView>
     </SafeAreaView>
   );

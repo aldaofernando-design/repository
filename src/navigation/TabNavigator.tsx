@@ -22,15 +22,23 @@ export const TabNavigator = () => {
     <Tab.Navigator
       screenOptions={({ route }) => ({
         headerShown: false,
-        tabBarActiveTintColor: colors.primary,
-        tabBarInactiveTintColor: colors.textSecondary,
+        tabBarActiveTintColor: '#0A84FF',
+        tabBarInactiveTintColor: 'rgba(255, 255, 255, 0.4)',
         tabBarStyle: {
-          backgroundColor: colors.surface,
-          borderTopWidth: 1,
-          borderTopColor: colors.border,
+          backgroundColor: 'transparent',
+          borderTopWidth: 0,
+          elevation: 0,
           paddingBottom: 5,
           paddingTop: 5,
-          height: 60,
+          height: 70,
+          position: 'absolute',
+          bottom: 15,
+          left: 15,
+          right: 15,
+        },
+        tabBarLabelStyle: {
+          fontSize: 11,
+          fontWeight: '500',
         },
         tabBarIcon: ({ focused, color, size }) => {
           let iconName: any = 'help-outline';
@@ -49,7 +57,7 @@ export const TabNavigator = () => {
             iconName = focused ? 'calendar-sharp' : 'calendar-outline';
           }
 
-          return <Ionicons name={iconName} size={size} color={color} />;
+          return <Ionicons name={iconName} size={24} color={color} />;
         },
       })}
     >

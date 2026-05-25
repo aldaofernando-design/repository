@@ -8,7 +8,8 @@ import {
   Image, 
   Dimensions, 
   Animated,
-  Platform
+  Platform,
+  PanResponder
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../theme/colors';
@@ -35,8 +36,64 @@ export const UsuariosScreen = ({ navigation }: any) => {
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   
   // Sheet Animation State
-  const [sheetState, setSheetState] = useState<'hidden' | 'half' | 'full'>('half');
+  // Animación del Bottom Sheet (2 estados: oculto, medio)
+  const [sheetState, setSheetState] = useState<'hidden' | 'half'>('half');
   const sheetHeight = useRef(new Animated.Value(SHEET_MID_HEIGHT)).current;
+  const startHeight = useRef(SHEET_MID_HEIGHT);
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (_, gestureState) => {
+        return Math.abs(gestureState.dy) > 5;
+      },
+      onPanResponderGrant: () => {
+        // @ts-ignore
+        startHeight.current = sheetHeight._value;
+      },
+      onPanResponderMove: (_, gestureState) => {
+        let newHeight = startHeight.current - gestureState.dy;
+        if (newHeight < SHEET_MIN_HEIGHT) {
+          newHeight = SHEET_MIN_HEIGHT;
+        } else if (newHeight > SHEET_MID_HEIGHT) {
+          newHeight = SHEET_MID_HEIGHT + (newHeight - SHEET_MID_HEIGHT) * 0.3;
+        }
+        sheetHeight.setValue(newHeight);
+      },
+      onPanResponderRelease: (_, gestureState) => {
+        // @ts-ignore
+        const currentVal = sheetHeight._value;
+        const middlePoint = (SHEET_MIN_HEIGHT + SHEET_MID_HEIGHT) / 2;
+        
+        let targetHeight = SHEET_MIN_HEIGHT;
+        let nextState: 'hidden' | 'half' = 'hidden';
+        
+        if (gestureState.vy < -0.5) {
+          targetHeight = SHEET_MID_HEIGHT;
+          nextState = 'half';
+        } else if (gestureState.vy > 0.5) {
+          targetHeight = SHEET_MIN_HEIGHT;
+          nextState = 'hidden';
+        } else {
+          if (currentVal > middlePoint) {
+            targetHeight = SHEET_MID_HEIGHT;
+            nextState = 'half';
+          } else {
+            targetHeight = SHEET_MIN_HEIGHT;
+            nextState = 'hidden';
+          }
+        }
+        
+        Animated.spring(sheetHeight, {
+          toValue: targetHeight,
+          useNativeDriver: false,
+          friction: 8,
+          tension: 40,
+        }).start();
+        setSheetState(nextState);
+      }
+    })
+  ).current;
 
   const contentOpacity = sheetHeight.interpolate({
     inputRange: [SHEET_MIN_HEIGHT, SHEET_MIN_HEIGHT + 80],
@@ -45,13 +102,10 @@ export const UsuariosScreen = ({ navigation }: any) => {
   });
 
   const toggleSheet = () => {
-    let nextState: 'hidden' | 'half' | 'full' = 'half';
+    let nextState: 'hidden' | 'half' = 'half';
     let toValue = SHEET_MID_HEIGHT;
 
     if (sheetState === 'half') {
-      nextState = 'full';
-      toValue = SHEET_MAX_HEIGHT;
-    } else if (sheetState === 'full') {
       nextState = 'hidden';
       toValue = SHEET_MIN_HEIGHT;
     } else {
@@ -71,7 +125,7 @@ export const UsuariosScreen = ({ navigation }: any) => {
   const handleUserPress = (user: User) => {
     setSelectedUser(user);
     // Collapse the sheet so the user can clearly see the details on the main screen
-    if (sheetState === 'half' || sheetState === 'full') {
+    if (sheetState === 'half') {
       let toValue = SHEET_MIN_HEIGHT;
       Animated.spring(sheetHeight, {
         toValue,
@@ -105,12 +159,28 @@ export const UsuariosScreen = ({ navigation }: any) => {
       {/* Header Overlay */}
       <View style={styles.headerOverlay}>
         <Text style={styles.headerTitle}>Personas</Text>
-        <TouchableOpacity 
-          style={styles.headerAddBtn}
-          onPress={() => navigation.navigate('UsuarioForm')}
-        >
-          <Ionicons name="add" size={24} color={colors.text} />
-        </TouchableOpacity>
+        <View style={styles.headerRightActions}>
+          <TouchableOpacity 
+            style={styles.headerProfileBtn}
+            onPress={() => navigation.navigate('Perfil')}
+            activeOpacity={0.7}
+          >
+            {currentUser?.photo ? (
+              <Image source={{ uri: currentUser.photo }} style={styles.headerAvatar} />
+            ) : (
+              <View style={styles.headerAvatarPlaceholder}>
+                <Ionicons name="person" size={18} color="#fff" />
+              </View>
+            )}
+          </TouchableOpacity>
+          <TouchableOpacity 
+            style={styles.headerAddBtn}
+            onPress={() => navigation.navigate('UsuarioForm')}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="add" size={24} color="#fff" />
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* Main Screen Content */}
@@ -195,19 +265,23 @@ export const UsuariosScreen = ({ navigation }: any) => {
 
       {/* Bottom List Sheet (Like ActividadScreen) */}
       <Animated.View style={[styles.bottomSheet, { height: sheetHeight }]}>
-        <TouchableOpacity style={styles.sheetHandleContainer} onPress={toggleSheet} activeOpacity={1}>
-          <View style={styles.sheetHandle} />
-        </TouchableOpacity>
+        <View style={styles.sheetHandleContainer} {...panResponder.panHandlers}>
+          <TouchableOpacity style={styles.sheetHandleTapArea} onPress={toggleSheet} activeOpacity={0.8}>
+            <View style={styles.sheetHandle} />
+          </TouchableOpacity>
+        </View>
         
-        <Animated.View style={{ flex: 1, opacity: contentOpacity }}>
+        <Animated.View style={{ flex: 1, opacity: contentOpacity, marginBottom: Platform.OS === 'android' ? 85 : 70 }}>
           <Text style={styles.sheetTitle}>Directorio</Text>
-          <FlatList
-            data={users}
-            keyExtractor={item => item.id}
-            renderItem={renderUserItem}
-            contentContainerStyle={styles.listContent}
-            showsVerticalScrollIndicator={false}
-          />
+          <View style={styles.listContainer}>
+            <FlatList
+              data={users}
+              keyExtractor={item => item.id}
+              renderItem={renderUserItem}
+              contentContainerStyle={styles.listContent}
+              showsVerticalScrollIndicator={false}
+            />
+          </View>
         </Animated.View>
       </Animated.View>
     </View>
@@ -222,8 +296,8 @@ const styles = StyleSheet.create({
   headerOverlay: {
     position: 'absolute',
     top: 60,
-    left: 20,
-    right: 20,
+    left: 25,
+    right: 25,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
@@ -235,13 +309,46 @@ const styles = StyleSheet.create({
     color: '#fff',
     letterSpacing: -0.5,
   },
-  headerAddBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(255,255,255,0.15)',
+  headerRightActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  headerProfileBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.2)',
+  },
+  headerAvatar: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+  },
+  headerAvatarPlaceholder: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: '#333',
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  headerAddBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#0A84FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 3,
+    elevation: 4,
   },
   mainScreenContent: {
     flex: 1,
@@ -280,6 +387,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  sheetHandleTapArea: {
+    width: '100%',
+    height: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   sheetHandle: {
     width: 40,
     height: 5,
@@ -293,9 +406,13 @@ const styles = StyleSheet.create({
     marginLeft: 20,
     marginBottom: 12,
   },
-  listContent: {
+  listContainer: {
+    flex: 1,
     paddingHorizontal: 20,
-    paddingBottom: 75,
+    paddingBottom: 20,
+  },
+  listContent: {
+    paddingBottom: 20,
   },
   userListItem: {
     flexDirection: 'row',

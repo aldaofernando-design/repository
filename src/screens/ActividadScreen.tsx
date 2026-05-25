@@ -1,12 +1,108 @@
 import React, { useContext, useEffect, useState, useRef } from 'react';
-import { View, FlatList, StyleSheet, Text, Dimensions, Alert, TouchableOpacity, Animated, Linking, Platform, Image } from 'react-native';
+import { View, FlatList, StyleSheet, Text, Dimensions, Alert, TouchableOpacity, Animated, Linking, Platform, Image, PanResponder, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import MapView, { Marker, Callout, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
+import { SelectDropdown } from '../components/SelectDropdown';
 import * as Location from 'expo-location';
-import { Ionicons } from '@expo/vector-icons';
+import { Ionicons, FontAwesome5 } from '@expo/vector-icons';
 import { colors } from '../theme/colors';
 import { AppContext } from '../context/AppContext';
 import { getElapsedTime, formatTime } from '../services/timeUtils';
+import { SiteMarker } from '../components/MapMarkerBitmap';
+import { calculatePlanningProgress, getReportProgressColor } from '../utils/progressHelper';
+
+
+const getInitials = (name: string) => {
+  if (!name) return '';
+  const parts = name.split(' ');
+  if (parts.length >= 2) {
+    return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
+  }
+  return name.slice(0, 2).toUpperCase();
+};
+
+// ─── Marcador de foto: borderRadius directo en Image (funciona en Android) ─────
+interface PhotoMarkerProps {
+  coordinate: { latitude: number; longitude: number };
+  photoUri?: string;
+  name: string;
+  zIndex?: number;
+  size?: number;
+  borderColor?: string;
+  onPress?: () => void;
+  title?: string;
+  description?: string;
+}
+
+const PhotoMarker = ({ coordinate, photoUri, name, zIndex = 100, size = 46, borderColor = '#fff', onPress, title, description }: PhotoMarkerProps) => {
+  const [loaded, setLoaded] = React.useState(!photoUri);
+  const r = size / 2;
+  const borderWidth = size > 20 ? 3 : 1.5;
+  const containerSize = size + borderWidth * 2;
+  const triWidth = Math.max(3, Math.round(size * 0.15));
+  const triHeight = Math.max(4, Math.round(size * 0.22));
+
+  return (
+    <Marker
+      coordinate={coordinate}
+      zIndex={zIndex}
+      tracksViewChanges={!loaded}
+      anchor={{ x: 0.5, y: 1.0 }}
+      onPress={onPress}
+      title={title}
+      description={description}
+    >
+      <View collapsable={false} style={{ alignItems: 'center' }}>
+        {/* Círculo de fondo + borde */}
+        <View
+          collapsable={false}
+          style={{
+            width: containerSize,
+            height: containerSize,
+            borderRadius: r + borderWidth,
+            backgroundColor: borderColor,
+            alignItems: 'center',
+            justifyContent: 'center',
+            elevation: 6,
+          }}
+        >
+          {photoUri ? (
+            // borderRadius en la Image directamente — única forma confiable en Android
+            <Image
+              source={{ uri: photoUri }}
+              style={{
+                width: size,
+                height: size,
+                borderRadius: r,   // aplicado en la Image, no en el contenedor
+              }}
+              onLoad={() => setLoaded(true)}
+            />
+          ) : (
+            <View style={{
+              width: size,
+              height: size,
+              borderRadius: r,
+              backgroundColor: '#007AFF',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}>
+              <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: Math.max(6, size * 0.3) }}>
+                {getInitials(name)}
+              </Text>
+            </View>
+          )}
+        </View>
+        {/* Punta triangular */}
+        <View style={{
+          width: 0, height: 0,
+          borderLeftWidth: triWidth, borderRightWidth: triWidth, borderTopWidth: triHeight,
+          borderLeftColor: 'transparent', borderRightColor: 'transparent',
+          borderTopColor: borderColor,
+        }} />
+      </View>
+    </Marker>
+  );
+};
 
 const { height: screenHeight, width: screenWidth } = Dimensions.get('window');
 const SHEET_MIN_HEIGHT = 110; // Altura para cubrir TabBar + espacio handle
@@ -25,10 +121,76 @@ export const ActividadScreen = ({ route, navigation }: any) => {
   const [selectedSiteId, setSelectedSiteId] = useState<string | null>(null);
   const mapRef = useRef<MapView>(null);
 
-  // Animación del Bottom Sheet (3 estados: oculto, medio, expandido)
-  const [sheetState, setSheetState] = useState<'hidden' | 'half' | 'full'>('half');
+  // Animación del Bottom Sheet (2 estados: oculto, medio)
+  const [sheetState, setSheetState] = useState<'hidden' | 'half'>('half');
   const sheetHeight = useRef(new Animated.Value(SHEET_MID_HEIGHT)).current;
   const [mapType, setMapType] = useState<'standard' | 'satellite'>('satellite');
+  const startHeight = useRef(SHEET_MID_HEIGHT);
+  const [tracksView, setTracksView] = useState(true);
+
+  useEffect(() => {
+    if (Platform.OS === 'android') {
+      setTracksView(true);
+      const timer = setTimeout(() => {
+        setTracksView(false);
+      }, 1500);
+      return () => clearTimeout(timer);
+    }
+  }, [allPlannings]);
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (_, gestureState) => {
+        return Math.abs(gestureState.dy) > 5;
+      },
+      onPanResponderGrant: () => {
+        // @ts-ignore
+        startHeight.current = sheetHeight._value;
+      },
+      onPanResponderMove: (_, gestureState) => {
+        let newHeight = startHeight.current - gestureState.dy;
+        if (newHeight < SHEET_MIN_HEIGHT) {
+          newHeight = SHEET_MIN_HEIGHT;
+        } else if (newHeight > SHEET_MID_HEIGHT) {
+          newHeight = SHEET_MID_HEIGHT + (newHeight - SHEET_MID_HEIGHT) * 0.3;
+        }
+        sheetHeight.setValue(newHeight);
+      },
+      onPanResponderRelease: (_, gestureState) => {
+        // @ts-ignore
+        const currentVal = sheetHeight._value;
+        const middlePoint = (SHEET_MIN_HEIGHT + SHEET_MID_HEIGHT) / 2;
+        
+        let targetHeight = SHEET_MIN_HEIGHT;
+        let nextState: 'hidden' | 'half' = 'hidden';
+        
+        if (gestureState.vy < -0.5) {
+          targetHeight = SHEET_MID_HEIGHT;
+          nextState = 'half';
+        } else if (gestureState.vy > 0.5) {
+          targetHeight = SHEET_MIN_HEIGHT;
+          nextState = 'hidden';
+        } else {
+          if (currentVal > middlePoint) {
+            targetHeight = SHEET_MID_HEIGHT;
+            nextState = 'half';
+          } else {
+            targetHeight = SHEET_MIN_HEIGHT;
+            nextState = 'hidden';
+          }
+        }
+        
+        Animated.spring(sheetHeight, {
+          toValue: targetHeight,
+          useNativeDriver: false,
+          friction: 8,
+          tension: 40,
+        }).start();
+        setSheetState(nextState);
+      }
+    })
+  ).current;
 
   const contentOpacity = sheetHeight.interpolate({
     inputRange: [SHEET_MIN_HEIGHT, SHEET_MIN_HEIGHT + 80],
@@ -64,7 +226,7 @@ export const ActividadScreen = ({ route, navigation }: any) => {
       }
       
       // Minimize the sheet so the site details on the main screen are visible
-      if (sheetState === 'full' || sheetState === 'half') {
+      if (sheetState === 'half') {
         Animated.spring(sheetHeight, {
           toValue: SHEET_MIN_HEIGHT,
           useNativeDriver: false,
@@ -79,6 +241,18 @@ export const ActividadScreen = ({ route, navigation }: any) => {
     }
   }, [route?.params?.autoSelectSiteId]);
 
+  const [selectedProject, setSelectedProject] = useState<string | null>(null);
+
+  const projectsList = Array.from(new Set(
+    allSites
+      .map(s => s.proyecto)
+      .filter((p): p is string => !!p)
+  ));
+  const projectOptions = [
+    { id: 'Todos', label: 'Todos los Proyectos' },
+    ...projectsList.map(p => ({ id: p, label: p }))
+  ];
+
   const today = new Date();
   const todayString = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
 
@@ -87,6 +261,14 @@ export const ActividadScreen = ({ route, navigation }: any) => {
     const isEjecutado = planning.status === 'Ejecutado';
     const isPlanificadoHoy = planning.status === 'Planificado' && planning.date === todayString;
     if (!isEnEjecucion && !isPlanificadoHoy && !isEjecutado) return false;
+
+    // Filter by project
+    const site = allSites.find(s => s.id === planning.siteId);
+    if (!site) return false;
+    if (currentUser?.role !== 'Trabajador' && selectedProject && selectedProject !== 'Todos' && site.proyecto !== selectedProject) {
+      return false;
+    }
+
     if (currentUser?.role === 'Trabajador') {
       return planning.workerId === currentUser.id;
     }
@@ -94,13 +276,10 @@ export const ActividadScreen = ({ route, navigation }: any) => {
   });
 
   const toggleSheet = () => {
-    let nextState: 'hidden' | 'half' | 'full' = 'half';
+    let nextState: 'hidden' | 'half' = 'half';
     let toValue = SHEET_MID_HEIGHT;
 
     if (sheetState === 'half') {
-      nextState = 'full';
-      toValue = SHEET_MAX_HEIGHT;
-    } else if (sheetState === 'full') {
       nextState = 'hidden';
       toValue = SHEET_MIN_HEIGHT;
     } else {
@@ -118,15 +297,24 @@ export const ActividadScreen = ({ route, navigation }: any) => {
   };
 
   const focusOnSite = (site: any) => {
+    const dLat = (250 / screenHeight) * 0.005;
     if (mapRef.current) {
       mapRef.current.animateToRegion({
-        latitude: site.lat,
+        latitude: site.lat - dLat,
         longitude: site.lng,
         latitudeDelta: 0.005,
         longitudeDelta: 0.005,
       }, 1000);
     }
     setSelectedSiteId(site.id);
+
+    Animated.spring(sheetHeight, {
+      toValue: SHEET_MID_HEIGHT,
+      useNativeDriver: false,
+      friction: 8,
+      tension: 40,
+    }).start();
+    setSheetState('half');
   };
 
   const openGoogleMaps = (site: any) => {
@@ -134,17 +322,50 @@ export const ActividadScreen = ({ route, navigation }: any) => {
     Linking.openURL(url);
   };
 
-  const goToMyLocation = async () => {
+  const focusOnWorker = (workerLat: number, workerLng: number, site: any) => {
+    const dLat = (250 / screenHeight) * 0.005;
+    if (mapRef.current) {
+      mapRef.current.animateToRegion({
+        latitude: workerLat - dLat,
+        longitude: workerLng,
+        latitudeDelta: 0.005,
+        longitudeDelta: 0.005,
+      }, 1000);
+    }
+    setSelectedSiteId(site.id);
+
+    Animated.spring(sheetHeight, {
+      toValue: SHEET_MID_HEIGHT,
+      useNativeDriver: false,
+      friction: 8,
+      tension: 40,
+    }).start();
+    setSheetState('half');
+  };
+
+  const focusOnUserLocation = async () => {
     try {
-      const location = await Location.getCurrentPositionAsync({});
-      if (mapRef.current) {
+      let coords = userLocation?.coords;
+      if (!coords) {
+        const location = await Location.getCurrentPositionAsync({});
+        coords = location.coords;
+      }
+      if (coords && mapRef.current) {
+        const dLat = (250 / screenHeight) * 0.005;
         mapRef.current.animateToRegion({
-          latitude: location.coords.latitude,
-          longitude: location.coords.longitude,
-          latitudeDelta: 0.01,
-          longitudeDelta: 0.01,
+          latitude: coords.latitude - dLat,
+          longitude: coords.longitude,
+          latitudeDelta: 0.005,
+          longitudeDelta: 0.005,
         }, 1000);
       }
+      Animated.spring(sheetHeight, {
+        toValue: SHEET_MID_HEIGHT,
+        useNativeDriver: false,
+        friction: 8,
+        tension: 40,
+      }).start();
+      setSheetState('half');
     } catch (e) {
       Alert.alert('Error', 'No se pudo obtener tu ubicación actual.');
     }
@@ -152,6 +373,79 @@ export const ActividadScreen = ({ route, navigation }: any) => {
 
   const selectedPlanning = filteredPlannings.find(p => p.siteId === selectedSiteId);
   const selectedSite = allSites.find(s => s.id === selectedSiteId);
+  const assignedWorker = allUsers.find(u => u.id === selectedPlanning?.workerId);
+  const displayWorkerName = assignedWorker?.name || 'Sin asignar';
+
+  const [elapsedTime, setElapsedTime] = useState('');
+
+  useEffect(() => {
+    if (selectedPlanning?.status === 'En ejecución' && selectedPlanning?.startTime) {
+      setElapsedTime(getElapsedTime(selectedPlanning.startTime));
+      const interval = setInterval(() => {
+        setElapsedTime(getElapsedTime(selectedPlanning.startTime));
+      }, 60000); // refresh every minute
+      return () => clearInterval(interval);
+    } else {
+      setElapsedTime('');
+    }
+  }, [selectedPlanning?.status, selectedPlanning?.startTime]);
+
+  const formatDateStr = (dateStr: string | undefined): string => {
+    if (!dateStr) return '';
+    const parts = dateStr.split('-');
+    if (parts.length === 3) {
+      return `${parts[2]}/${parts[1]}/${parts[0]}`;
+    }
+    return dateStr;
+  };
+
+  const formatDateTimeStr = (isoString: string | undefined): string => {
+    if (!isoString) return '';
+    const date = new Date(isoString);
+    if (isNaN(date.getTime())) return '';
+    const day = String(date.getDate()).padStart(2, '0');
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const year = date.getFullYear();
+    const hrs = String(date.getHours()).padStart(2, '0');
+    const mins = String(date.getMinutes()).padStart(2, '0');
+    return `${day}/${month}/${year} a las ${hrs}:${mins}`;
+  };
+
+  const getStatusColor = (status: string | undefined) => {
+    if (!status) return 'rgba(255, 255, 255, 0.4)';
+    switch (status) {
+      case 'En ejecución':
+        return '#FF9500';
+      case 'Pospuesto':
+        return '#FF453A';
+      case 'Planificado':
+        return '#0A84FF';
+      case 'Ejecutado':
+        return '#30D158';
+      case 'Sin Asignar':
+      default:
+        return 'rgba(255, 255, 255, 0.4)';
+    }
+  };
+
+  const getStatusMessage = (status: string | undefined, workerName: string | undefined, planning: any) => {
+    const name = workerName || 'Sin asignar';
+    if (!status) return 'Sin asignar';
+    switch (status) {
+      case 'En ejecución':
+        return `En ejecución • Asignado a: ${name} • ${elapsedTime || getElapsedTime(planning?.startTime)}`;
+      case 'Pospuesto':
+        return `Pospuesto • Tenía asignado a: ${name} • Desde el ${formatDateStr(planning?.date)}`;
+      case 'Planificado':
+        return `Planificado • Asignado a: ${name} • Para el ${formatDateStr(planning?.date)}`;
+      case 'Sin Asignar':
+        return 'Sin Asignar';
+      case 'Ejecutado':
+        return `Ejecutado • Realizado por: ${name}${planning?.endTime ? ` • El ${formatDateTimeStr(planning.endTime)}` : ''}`;
+      default:
+        return status || 'Sin Asignar';
+    }
+  };
 
   const renderPlanningItem = ({ item }: { item: any }) => {
     const site = allSites.find(s => s.id === item.siteId);
@@ -196,7 +490,7 @@ export const ActividadScreen = ({ route, navigation }: any) => {
                 <Ionicons name="person" size={10} color={colors.textSecondary} />
               )}
               <Text style={styles.workerBadgeText}>
-                {worker?.name || 'Sin asignar'}
+                {worker?.name || 'Sin asignar'}{site.proyecto ? ` • ${site.proyecto}` : ''}
               </Text>
             </View>
           )}
@@ -226,51 +520,17 @@ export const ActividadScreen = ({ route, navigation }: any) => {
             return null;
           }
           return (
-            <Marker
-              key={plan.id}
+            <SiteMarker
+              key={`${plan.id}-${plan.status}`}
               coordinate={{ latitude: site.lat, longitude: site.lng }}
-              onPress={() => setSelectedSiteId(site.id)}
-            >
-              <View style={styles.customMarker}>
-                <View style={[
-                  styles.markerBubble, 
-                  { 
-                    backgroundColor: plan.status === 'Ejecutado' ? colors.success : 
-                                    plan.status === 'En ejecución' ? colors.warning : '#2563EB' 
-                  }
-                ]}>
-                  <Text style={styles.markerText}>{site.code}</Text>
-                </View>
-                <View style={[
-                  styles.markerArrow, 
-                  { 
-                    borderBottomColor: plan.status === 'Ejecutado' ? colors.success : 
-                                      plan.status === 'En ejecución' ? colors.warning : '#2563EB' 
-                  }
-                ]} />
-              </View>
-            </Marker>
+              code={site.code}
+              status={plan.status}
+              onPress={() => focusOnSite(site)}
+              zIndex={99}
+            />
           );
         })}
-        {/* Marcador "Yo" para el Trabajador */}
-        {currentUser?.role === 'Trabajador' && userLocation && (
-          <Marker
-            coordinate={{
-              latitude: userLocation.coords.latitude,
-              longitude: userLocation.coords.longitude,
-            }}
-          >
-            <View style={styles.yoMarkerContainer}>
-              <View style={styles.yoPhotoContainer}>
-                {currentUser.photo ? (
-                  <Image source={{ uri: currentUser.photo }} style={styles.yoPhoto} />
-                ) : (
-                  <Ionicons name="person" size={30} color="#007AFF" />
-                )}
-              </View>
-            </View>
-          </Marker>
-        )}
+        {/* Ubicación del Trabajador: usa el punto nativo de showsUserLocation */}
 
         {/* Marcadores de Trabajadores (Solo para Admin/Coordinador) */}
         {(currentUser?.role === 'Administrador' || currentUser?.role === 'Coordinador') && (
@@ -278,33 +538,26 @@ export const ActividadScreen = ({ route, navigation }: any) => {
             .filter(u => u.role === 'Trabajador')
             .filter(u => filteredPlannings.some(p => p.workerId === u.id))
             .map(worker => {
-              // Simulación de ubicación del trabajador (cerca de uno de sus sitios asignados)
               const workerPlan = filteredPlannings.find(p => p.workerId === worker.id);
               const workerSite = allSites.find(s => s.id === workerPlan?.siteId);
               if (!workerSite) return null;
 
-              // Desplazamos un poco la ubicación para que no esté exactamente sobre el sitio
               const workerLat = workerSite.lat + 0.002;
               const workerLng = workerSite.lng + 0.002;
 
               return (
-                <Marker
+                <PhotoMarker
                   key={`worker-${worker.id}`}
                   coordinate={{ latitude: workerLat, longitude: workerLng }}
+                  photoUri={worker.photo}
+                  name={worker.name}
+                  zIndex={101}
+                  size={24}
+                  borderColor="#30D158"
                   title={worker.name}
                   description={`Técnico en terreno - ${worker.company}`}
-                >
-                  <View style={styles.workerMarker}>
-                    <View style={styles.workerMarkerInner}>
-                      {worker.photo ? (
-                        <Image source={{ uri: worker.photo }} style={styles.workerPhoto} />
-                      ) : (
-                        <Ionicons name="person" size={24} color="#fff" />
-                      )}
-                    </View>
-                    <View style={styles.workerMarkerArrow} />
-                  </View>
-                </Marker>
+                  onPress={() => focusOnWorker(workerLat, workerLng, workerSite)}
+                />
               );
             })
         )}
@@ -318,46 +571,35 @@ export const ActividadScreen = ({ route, navigation }: any) => {
           >
             <Ionicons name={mapType === 'standard' ? "earth" : "map"} size={20} color="#1C1C1E" />
           </TouchableOpacity>
-          <TouchableOpacity style={styles.controlBtn} onPress={goToMyLocation}>
+          <TouchableOpacity style={styles.controlBtn} onPress={focusOnUserLocation}>
             <Ionicons name="location" size={20} color="#1C1C1E" />
           </TouchableOpacity>
         </View>
 
         <Animated.View style={[styles.bottomSheet, { height: sheetHeight }]}>
-          <TouchableOpacity style={styles.sheetHandleContainer} onPress={toggleSheet} activeOpacity={1}>
-            <View style={styles.sheetHandle} />
-          </TouchableOpacity>
+          <View style={styles.sheetHandleContainer} {...panResponder.panHandlers}>
+            <TouchableOpacity style={styles.sheetHandleTapArea} onPress={toggleSheet} activeOpacity={0.8}>
+              <View style={styles.sheetHandle} />
+            </TouchableOpacity>
+          </View>
 
-          <Animated.View style={{ flex: 1, opacity: contentOpacity }}>
+          <Animated.View style={{ flex: 1, opacity: contentOpacity, marginBottom: Platform.OS === 'android' ? 85 : 70 }}>
             {selectedSiteId && selectedSite ? (
-              <View style={styles.detailContainer}>
+              <ScrollView 
+                style={styles.detailContainer} 
+                contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 20 }}
+                showsVerticalScrollIndicator={true}
+              >
             <View style={styles.detailHeader}>
-              <View style={{ flex: 1, alignItems: 'center', paddingHorizontal: 50 }}>
+              <View style={{ flex: 1 }}>
                 <Text style={styles.detailTitle} numberOfLines={1} ellipsizeMode="tail">
                   {selectedSite.code} - {selectedSite.name}
                 </Text>
-                {currentUser?.role !== 'Trabajador' ? (
-                  <View style={styles.workerBadge}>
-                    <Ionicons name="person" size={14} color="rgba(255, 255, 255, 0.7)" />
-                    <Text style={styles.workerBadgeTextFull}>
-                      Asignado: {selectedPlanning?.workerName || 'Sin asignar'}
-                    </Text>
-                  </View>
-                ) : (
-                  <View style={[styles.statusBadge, { 
-                    backgroundColor: selectedPlanning?.status === 'Ejecutado' ? colors.success + '20' : 
-                                    selectedPlanning?.status === 'En ejecución' ? '#FF950020' : '#0A84FF20' 
-                  }]}>
-                    <Text style={[styles.statusBadgeText, { 
-                      color: selectedPlanning?.status === 'Ejecutado' ? colors.success : 
-                             selectedPlanning?.status === 'En ejecución' ? '#FF9500' : '#0A84FF' 
-                    }]}>
-                      {selectedPlanning?.status} {selectedPlanning?.status === 'En ejecución' ? `• ${getElapsedTime(selectedPlanning.startTime)}` : ''}
-                    </Text>
-                  </View>
-                )}
+                <Text style={[styles.statusSubtitle, { color: getStatusColor(selectedPlanning?.status) }]}>
+                  {getStatusMessage(selectedPlanning?.status, displayWorkerName, selectedPlanning)}
+                </Text>
               </View>
-              <TouchableOpacity onPress={() => setSelectedSiteId(null)} style={styles.closeButton}>
+              <TouchableOpacity onPress={() => setSelectedSiteId(null)}>
                 <Ionicons name="close-circle" size={30} color="rgba(255, 255, 255, 0.3)" />
               </TouchableOpacity>
             </View>
@@ -383,17 +625,21 @@ export const ActividadScreen = ({ route, navigation }: any) => {
                      selectedPlanning?.status === 'En ejecución' ? "En ejecución" : "Iniciar Actividad"}
                   </Text>
                 </TouchableOpacity>
-              ) : (
-                <TouchableOpacity 
-                  style={styles.actionCard}
-                  onPress={() => navigation.navigate('DetalleActividad', { planningId: selectedPlanning?.id })}
-                >
-                  <View style={[styles.actionIcon, { backgroundColor: '#34C759' }]}>
-                    <Ionicons name="search" size={20} color="#fff" />
-                  </View>
-                  <Text style={styles.actionText}>Ver Estado</Text>
-                </TouchableOpacity>
-              )}
+              ) : (() => {
+                const progress = calculatePlanningProgress(selectedPlanning, selectedSite);
+                const iconBgColor = getReportProgressColor(progress);
+                return (
+                  <TouchableOpacity 
+                    style={styles.actionCard}
+                    onPress={() => navigation.navigate('DetalleActividad', { planningId: selectedPlanning?.id })}
+                  >
+                    <View style={[styles.actionIcon, { backgroundColor: iconBgColor }]}>
+                      <Ionicons name="search" size={20} color="#fff" />
+                    </View>
+                    <Text style={styles.actionText}>Ver Informe</Text>
+                  </TouchableOpacity>
+                );
+              })()}
 
               <TouchableOpacity 
                 style={styles.actionCard}
@@ -452,20 +698,44 @@ export const ActividadScreen = ({ route, navigation }: any) => {
                 </View>
               )}
 
-              {!selectedSite.apagado3G && !selectedSite.apagadoBAFI && !selectedSite.configurarRETU && (
+              {(selectedSite.proyecto === 'iLOQ' || selectedSite.cambioChapa === 'Si' || selectedSite.cambioChapa === 'SI') && (
+                <View style={styles.taskItem}>
+                  <Ionicons 
+                    name="checkmark-circle" 
+                    size={20} 
+                    color="#30D158" 
+                  />
+                  <Text style={styles.taskText}>Cambio de Chapa: SI</Text>
+                </View>
+              )}
+
+              {!selectedSite.apagado3G && !selectedSite.apagadoBAFI && !selectedSite.configurarRETU && 
+               selectedSite.proyecto !== 'iLOQ' && selectedSite.cambioChapa !== 'Si' && selectedSite.cambioChapa !== 'SI' && (
                 <Text style={styles.emptyTasksText}>Sin actividades específicas registradas.</Text>
               )}
             </View>
-          </View>
+          </ScrollView>
         ) : (
           <View style={styles.listContainer}>
             {/* Título eliminado */}
+            {currentUser?.role !== 'Trabajador' && (
+              <View style={{ marginBottom: 12 }}>
+                <SelectDropdown 
+                  label="Filtrar por Proyecto"
+                  value={selectedProject}
+                  options={projectOptions}
+                  onSelect={setSelectedProject}
+                  placeholder="Todos los Proyectos"
+                />
+              </View>
+            )}
             <FlatList
               data={filteredPlannings}
               keyExtractor={item => item.id}
               renderItem={renderPlanningItem}
+              contentContainerStyle={{ paddingBottom: 20 }}
               ListEmptyComponent={
-                <Text style={styles.emptyText}>No hay actividades para hoy.</Text>
+                <Text style={styles.emptyListText}>No hay actividades para hoy.</Text>
               }
             />
           </View>
@@ -483,38 +753,44 @@ const styles = StyleSheet.create({
   map: {
     ...StyleSheet.absoluteFillObject,
   },
-  customMarker: {
+  towerMarkerContainer: {
+    flexDirection: 'column',
     alignItems: 'center',
     justifyContent: 'center',
-    width: 60,
-    height: 60,
+    width: 90,
+    height: 75,
   },
-  markerBubble: {
-    backgroundColor: colors.primary,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 12,
-    borderWidth: 2,
+  towerIconWrapper: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    width: 28,
+    height: 28,
+    borderWidth: 1.5,
     borderColor: '#fff',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 1.41,
+    elevation: 2,
   },
-  markerText: {
+  towerLabel: {
+    backgroundColor: 'rgba(0, 0, 0, 0.75)',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    marginTop: 3,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.2)',
+    alignSelf: 'center',
+    minWidth: 55,
+  },
+  towerLabelText: {
     color: '#fff',
-    fontSize: 12,
+    fontSize: 10,
     fontWeight: 'bold',
-  },
-  markerArrow: {
-    width: 0,
-    height: 0,
-    backgroundColor: 'transparent',
-    borderStyle: 'solid',
-    borderLeftWidth: 6,
-    borderRightWidth: 6,
-    borderBottomWidth: 10,
-    borderLeftColor: 'transparent',
-    borderRightColor: 'transparent',
-    borderBottomColor: colors.primary,
-    transform: [{ rotate: '180deg' }],
-    marginTop: -2,
+    textAlign: 'center',
   },
   nativeCallout: {
     minWidth: 160,
@@ -555,6 +831,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  sheetHandleTapArea: {
+    width: '100%',
+    height: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   sheetHandle: {
     width: 36,
     height: 5,
@@ -571,7 +853,7 @@ const styles = StyleSheet.create({
   listContainer: {
     flex: 1,
     paddingHorizontal: 20,
-    paddingBottom: 75,
+    paddingBottom: 20,
   },
   listItem: {
     flexDirection: 'row',
@@ -622,7 +904,11 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: 'bold',
     color: '#fff',
-    textAlign: 'center',
+  },
+  statusSubtitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    marginTop: 4,
   },
   closeButton: {
     position: 'absolute',
@@ -638,10 +924,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     marginBottom: 30,
-    paddingHorizontal: 10,
   },
   actionCard: {
-    width: (screenWidth - 60) / 3,
+    width: (screenWidth - 80) / 3,
     backgroundColor: 'rgba(255, 255, 255, 0.1)',
     borderRadius: 16,
     padding: 12,
@@ -736,7 +1021,7 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     fontWeight: '500',
   },
-  startTimeText: {
+  startTimeText2_REMOVED: {
     fontSize: 12,
     color: colors.warning,
     fontWeight: 'bold',
@@ -764,24 +1049,24 @@ const styles = StyleSheet.create({
   workerMarker: {
     alignItems: 'center',
     justifyContent: 'center',
-    width: 60,
-    height: 60,
+    width: 40,
+    height: 40,
   },
   workerMarkerInner: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
     backgroundColor: '#30D158', // Green for workers like Find My people
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 2,
+    borderWidth: 1.5,
     borderColor: '#fff',
     overflow: 'hidden',
   },
   workerPhoto: {
     width: '100%',
     height: '100%',
-    borderRadius: 22,
+    borderRadius: 14,
   },
   workerMarkerArrow: {
     width: 0,
@@ -847,5 +1132,39 @@ const styles = StyleSheet.create({
     width: '100%',
     height: '100%',
     borderRadius: 25,
+  },
+  yoMarkerAndroid: {
+    width: 24,
+    height: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  yoMarkerAndroidPulse: {
+    position: 'absolute',
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: 'rgba(0, 122, 255, 0.25)',
+  },
+  yoMarkerAndroidDot: {
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    backgroundColor: '#007AFF',
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
+    elevation: 3,
+  },
+  workerInitials: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+  emptyListText: {
+    fontSize: 14,
+    color: 'rgba(255, 255, 255, 0.4)',
+    fontStyle: 'italic',
+    textAlign: 'center',
+    marginTop: 40,
   },
 });

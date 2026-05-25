@@ -21,7 +21,7 @@ import { AppContext, User } from '../context/AppContext';
 export const UsuarioFormScreen = ({ route, navigation }: any) => {
   const { userId } = route.params || {};
   const context = useContext(AppContext);
-  const currentUserRole = context?.currentUser.role || 'Trabajador';
+  const currentUserRole = context?.currentUser?.role || 'Trabajador';
   
   const existingUser = userId ? context?.users.find(u => u.id === userId) : null;
 

@@ -1,11 +1,13 @@
 import React, { useContext } from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import { Platform } from 'react-native';
 import { UsuariosScreen } from '../screens/UsuariosScreen';
 import { SitiosScreen } from '../screens/SitiosScreen';
 import { PlanificacionScreen } from '../screens/PlanificacionScreen';
 import { ActividadScreen } from '../screens/ActividadScreen';
 import { AvanceScreen } from '../screens/AvanceScreen';
 import { CalendarioScreen } from '../screens/CalendarioScreen';
+import { PerfilScreen } from '../screens/PerfilScreen';
 import { colors } from '../theme/colors';
 import { AppContext } from '../context/AppContext';
 
@@ -16,7 +18,7 @@ const Tab = createBottomTabNavigator();
 
 export const TabNavigator = () => {
   const context = useContext(AppContext);
-  const isTrabajador = context?.currentUser.role === 'Trabajador';
+  const isTrabajador = context?.currentUser?.role === 'Trabajador';
 
   return (
     <Tab.Navigator
@@ -32,7 +34,7 @@ export const TabNavigator = () => {
           paddingTop: 5,
           height: 70,
           position: 'absolute',
-          bottom: 15,
+          bottom: Platform.OS === 'android' ? 30 : 15,
           left: 15,
           right: 15,
         },
@@ -55,6 +57,8 @@ export const TabNavigator = () => {
             iconName = focused ? 'bar-chart' : 'bar-chart-outline';
           } else if (route.name === 'Calendario') {
             iconName = focused ? 'calendar-sharp' : 'calendar-outline';
+          } else if (route.name === 'Perfil') {
+            iconName = focused ? 'person' : 'person-outline';
           }
 
           return <Ionicons name={iconName} size={24} color={color} />;
@@ -64,13 +68,14 @@ export const TabNavigator = () => {
       {!isTrabajador && <Tab.Screen name="Usuarios" component={UsuariosScreen} />}
       {!isTrabajador && <Tab.Screen name="Sitios" component={SitiosScreen} />}
       
-      {/* Trabajador: ve Calendario, Actividad */}
-      {isTrabajador && <Tab.Screen name="Calendario" component={CalendarioScreen} />}
+      <Tab.Screen name="Calendario" component={CalendarioScreen} />
       <Tab.Screen name="Actividad" component={ActividadScreen} />
       
+      {isTrabajador && <Tab.Screen name="Perfil" component={PerfilScreen} />}
+      
       {/* Administrador/Coordinador: ven Planificación y Avance en vez de Calendario */}
-      {!isTrabajador && <Tab.Screen name="Planificacion" component={PlanificacionScreen} options={{ title: 'Planif.' }} />}
-      {!isTrabajador && <Tab.Screen name="Avance" component={AvanceScreen} />}
+      {/* {!isTrabajador && <Tab.Screen name="Planificacion" component={PlanificacionScreen} options={{ title: 'Planif.' }} />} */}
+      {/* {!isTrabajador && <Tab.Screen name="Avance" component={AvanceScreen} />} */}
     </Tab.Navigator>
   );
 };

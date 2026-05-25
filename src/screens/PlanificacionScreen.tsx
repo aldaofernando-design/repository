@@ -10,6 +10,7 @@ import { ConfirmationModal } from '../components/ConfirmationModal';
 
 export const PlanificacionScreen = ({ navigation }: any) => {
   const context = useContext(AppContext);
+  const [selectedProject, setSelectedProject] = useState<string | null>(null);
   const [selectedSite, setSelectedSite] = useState<string | null>(null);
   const [selectedWorker, setSelectedWorker] = useState<string | null>(null);
   
@@ -21,6 +22,22 @@ export const PlanificacionScreen = ({ navigation }: any) => {
   const [dateModal, setDateModal] = useState<{ visible: boolean, planning: any }>({ visible: false, planning: null });
   const [successModal, setSuccessModal] = useState({ visible: false, message: '' });
 
+  // Dynamically extract project options
+  const projectsList = Array.from(new Set(
+    (context?.sites || [])
+      .map(s => s.proyecto)
+      .filter((p): p is string => !!p)
+  ));
+  const projectOptions = [
+    { id: 'Todos', label: 'Todos los Proyectos' },
+    ...projectsList.map(p => ({ id: p, label: p }))
+  ];
+
+  const handleProjectSelect = (project: string) => {
+    setSelectedProject(project);
+    setSelectedSite(null);
+  };
+
   // 1. Filter Sites (Status !== Ejecutado)
   const siteStatusMap = context?.plannings.reduce((acc, plan) => {
     acc[plan.siteId] = plan.status;
@@ -29,7 +46,10 @@ export const PlanificacionScreen = ({ navigation }: any) => {
 
   const availableSites = (context?.sites || []).filter(site => {
     const status = siteStatusMap[site.id] || site.estadoExcel || 'Sin Asignar';
-    return ['Planificado', 'Sin iniciar', 'Sin Asignar', 'Sin asignar', 'En ejecución'].includes(status);
+    const matchesStatus = ['Planificado', 'Sin iniciar', 'Sin Asignar', 'Sin asignar', 'En ejecución', 'Pospuesto'].includes(status);
+    if (!matchesStatus) return false;
+    if (selectedProject && selectedProject !== 'Todos' && site.proyecto !== selectedProject) return false;
+    return true;
   });
 
   const siteOptions = availableSites.map(s => ({
@@ -105,6 +125,15 @@ export const PlanificacionScreen = ({ navigation }: any) => {
     }
 
     const dateString = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+    
+    const today = new Date();
+    const todayString = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    const plannedForToday = context?.plannings.find(p => p.siteId === selectedSite && p.date === todayString);
+    if (plannedForToday && dateString !== todayString) {
+      Alert.alert('Restricción', 'Este sitio ya está planificado para el día de hoy y no se puede planificar para un día diferente.');
+      return;
+    }
+
     const existingPlanning = context?.plannings.find(p => p.siteId === selectedSite);
 
     if (existingPlanning) {
@@ -136,6 +165,14 @@ export const PlanificacionScreen = ({ navigation }: any) => {
       <ScrollView contentContainerStyle={styles.scroll}>
         <Text style={styles.title}>Nueva Planificación</Text>
         
+        <SelectDropdown 
+          label="Filtrar por Proyecto"
+          value={selectedProject}
+          options={projectOptions}
+          onSelect={handleProjectSelect}
+          placeholder="Todos los Proyectos"
+        />
+
         <SelectDropdown 
           label="1. Seleccionar Sitio"
           value={selectedSite}

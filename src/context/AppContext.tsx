@@ -2,6 +2,12 @@ import React, { createContext, useState, ReactNode, useEffect } from 'react';
 import { Alert } from 'react-native';
 import { users as initialUsers, sites as initialSites, plannings as initialPlannings } from '../data/mockData';
 import { getSession, clearSession, saveSession } from '../utils/sessionHelper';
+import {
+  getUsers, getSites, getPlannings,
+  createPlanningApi, updatePlanningApi,
+  checkApiHealth,
+  ApiUser, ApiSite, ApiPlanning,
+} from '../services/apiService';
 
 export type UserRole = 'Administrador' | 'Coordinador' | 'Trabajador';
 
@@ -51,13 +57,13 @@ export interface Planning {
   };
   datosGenerales?: {
     tipoEstructura: string;
-    fotoEstructura?: string; // obligatoria si selecciona tipoEstructura
+    fotoEstructura?: string;
     tipoContenedor: string;
-    fotoFueraContenedor?: string; // obligatoria si selecciona tipoContenedor
-    fotosGeneralesSitio?: string[]; // 2 fotos obligatorias si selecciona tipoContenedor
-    fotosInteriorContenedor?: string[]; // 2 fotos obligatorias si selecciona tipoContenedor
+    fotoFueraContenedor?: string;
+    fotosGeneralesSitio?: string[];
+    fotosInteriorContenedor?: string[];
     tipoEmpalme: string;
-    fotosEmpalme: string[];   // 1 si mono, 3 si trifasico (Consumo Inicial)
+    fotosEmpalme: string[];
     capacidadProteccion: string;
     fotoMedidor: string;
     fotoSectorMedidor: string;
@@ -66,16 +72,16 @@ export interface Planning {
     ampereEmpalme?: string[];
   };
   apagado3G?: {
-    estado3G: string; // Encendido, Apagado, N/A
-    seApagara3G: string; // Si, No, N/A (oculto en UI)
+    estado3G: string;
+    seApagara3G: string;
     fotoEquipo3GEncendido?: string;
     fotoBreaker3GEncendido?: string;
     fotoBreaker3GApagado?: string;
     fotoEquipo3GApagado?: string;
     fotoEspacioRetirado?: string;
-    seRetirara3G?: string; // Si, No (para cuando el estado inicial es Apagado)
-    estadoRRU: string; // Encendido, Apagado, N/A
-    seApagaraRRU: string; // Si, No, N/A
+    seRetirara3G?: string;
+    estadoRRU: string;
+    seApagaraRRU: string;
     fotoRRUEncendido?: string;
     fotoRRUApagado?: string;
     ampere3GEncendido?: string;
@@ -93,7 +99,7 @@ export interface Planning {
     justificacion?: string;
   };
   apagadoBafiSector1?: {
-    estadoBasebandSector1: string; // 'Encendido' | 'Apagado' | 'N/A'
+    estadoBasebandSector1: string;
     fotoBreakerBaseband1Encendido?: string;
     fotoBaseband1Encendida?: string;
     confirmadoApagadoRetirar?: boolean;
@@ -103,7 +109,7 @@ export interface Planning {
     ampereConsumoFinal?: string[];
   };
   apagadoBafiSector2?: {
-    estadoBasebandSector2: string; // 'Encendido' | 'Apagado' | 'N/A'
+    estadoBasebandSector2: string;
     fotoBreakerBaseband2Encendido?: string;
     fotoBaseband2Encendida?: string;
     confirmadoApagadoRetirar?: boolean;
@@ -113,7 +119,7 @@ export interface Planning {
     ampereConsumoFinal?: string[];
   };
   apagadoBafiSector3?: {
-    estadoBasebandSector3: string; // 'Encendido' | 'Apagado' | 'N/A'
+    estadoBasebandSector3: string;
     fotoBreakerBaseband3Encendido?: string;
     fotoBaseband3Encendida?: string;
     confirmadoApagadoRetirar?: boolean;
@@ -123,25 +129,25 @@ export interface Planning {
     ampereConsumoFinal?: string[];
   };
   apagadoAntenaSector1?: {
-    estadoAntenaSector1: string; // 'Encendida' | 'Apagada' | 'N/A'
+    estadoAntenaSector1: string;
     fotoBreakerAntenaS1Encendido?: string;
-    seApagaraAntenaS1?: string; // 'Si' | 'No'
+    seApagaraAntenaS1?: string;
     fotoBreakerAntenaS1Apagado?: string;
     fotosConsumoFinal?: string[];
     ampereConsumoFinal?: string[];
   };
   apagadoAntenaSector2?: {
-    estadoAntenaSector2: string; // 'Encendida' | 'Apagada' | 'N/A'
+    estadoAntenaSector2: string;
     fotoBreakerAntenaS2Encendido?: string;
-    seApagaraAntenaS2?: string; // 'Si' | 'No'
+    seApagaraAntenaS2?: string;
     fotoBreakerAntenaS2Apagado?: string;
     fotosConsumoFinal?: string[];
     ampereConsumoFinal?: string[];
   };
   apagadoAntenaSector3?: {
-    estadoAntenaSector3: string; // 'Encendida' | 'Apagada' | 'N/A'
+    estadoAntenaSector3: string;
     fotoBreakerAntenaS3Encendido?: string;
-    seApagaraAntenaS3?: string; // 'Si' | 'No'
+    seApagaraAntenaS3?: string;
     fotoBreakerAntenaS3Apagado?: string;
     fotosConsumoFinal?: string[];
     ampereConsumoFinal?: string[];
@@ -176,6 +182,7 @@ interface AppContextType {
   currentUser: User | null;
   setCurrentUser: (user: User | null) => void;
   loadingSession: boolean;
+  isApiConnected: boolean;
   logout: () => void;
   addUser: (user: Omit<User, 'id'>) => void;
   updateUser: (id: string, updatedUser: Partial<User>) => void;
@@ -187,18 +194,99 @@ interface AppContextType {
 
 export const AppContext = createContext<AppContextType | undefined>(undefined);
 
+// ── Adaptadores: API → formato interno de la App ─────────────
+function adaptApiUser(u: ApiUser): User {
+  return {
+    id:      u.id,
+    name:    u.name,
+    email:   u.email,
+    phone:   u.phone,
+    company: u.company,
+    role:    u.role,
+    photo:   u.photo_url || `https://i.pravatar.cc/150?u=${u.id}`,
+    status:  (u.status as 'Activo' | 'Inactivo') || 'Activo',
+  };
+}
+
+function adaptApiSite(s: ApiSite): Site {
+  return {
+    id:          s.id,
+    code:        s.code,
+    name:        s.name,
+    address:     s.address || '',
+    commune:     s.commune || '',
+    lat:         s.latitude  || 0,
+    lng:         s.longitude || 0,
+    region:      s.region    || undefined,
+    estadoExcel: s.estado_excel,
+    proyecto:    s.proyecto,
+    apagadoBAFI: s.apagado_bafi ? 'SI' : 'NO',
+  };
+}
+
+function adaptApiPlanning(p: ApiPlanning): Planning {
+  return {
+    id:        p.id,
+    siteId:    p.site_id,
+    workerId:  p.worker_id,
+    date:      p.scheduled_date?.split('T')[0] || p.scheduled_date,
+    status:    p.status,
+    startTime: p.start_time  || undefined,
+    endTime:   p.end_time    || undefined,
+    details:   { spliceCapacity: '', photos: [] },
+  };
+}
+
 export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  const [users, setUsers] = useState<User[]>(initialUsers as User[]);
-  const [sites, setSites] = useState<Site[]>(initialSites);
+  const [users, setUsers]       = useState<User[]>(initialUsers as User[]);
+  const [sites, setSites]       = useState<Site[]>(initialSites);
   const [plannings, setPlannings] = useState<Planning[]>(initialPlannings);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [loadingSession, setLoadingSession] = useState(true);
+  const [isApiConnected, setIsApiConnected] = useState(false);
 
-  // Regla para posponer automáticamente planificaciones pasadas no iniciadas
+  // ── Cargar datos desde la API al iniciar ──────────────────
+  useEffect(() => {
+    const loadFromApi = async () => {
+      try {
+        const alive = await checkApiHealth();
+        setIsApiConnected(alive);
+
+        if (alive) {
+          // Cargar en paralelo: usuarios, sitios y planificaciones
+          const [apiUsers, apiSites, apiPlannings] = await Promise.all([
+            getUsers(),
+            getSites(),
+            getPlannings(),
+          ]);
+
+          if (apiUsers.length > 0) {
+            setUsers(apiUsers.map(adaptApiUser));
+          }
+          if (apiSites.length > 0) {
+            setSites(apiSites.map(adaptApiSite));
+          }
+          if (apiPlannings.length > 0) {
+            setPlannings(apiPlannings.map(adaptApiPlanning));
+          }
+          console.log(`✅ API conectada — ${apiUsers.length} usuarios, ${apiSites.length} sitios, ${apiPlannings.length} planificaciones`);
+        } else {
+          console.log('⚠️ API no disponible — usando datos locales');
+        }
+      } catch (error) {
+        setIsApiConnected(false);
+        console.log('⚠️ Error conectando a la API — usando datos locales:', error);
+      }
+    };
+
+    loadFromApi();
+  }, []);
+
+  // ── Posponer automáticamente planificaciones pasadas ──────
   useEffect(() => {
     const today = new Date();
     const todayString = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-    
+
     setPlannings(prev => {
       let changed = false;
       const updated = prev.map(p => {
@@ -212,11 +300,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     });
   }, []);
 
-  // Verificar la sesión guardada y aplicar expiración de 15 días
+  // ── Sesión automática como Diego Quezada (u6) ─────────────
   useEffect(() => {
     const verifySavedSession = async () => {
       try {
-        // Lanzar la aplicación como Diego Quezada (u6) por defecto
         const matched = users.find(u => u.id === 'u6');
         if (matched) {
           setCurrentUser(matched);
@@ -269,20 +356,53 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   };
 
-  const addPlanning = (planningData: Omit<Planning, 'id' | 'details'>) => {
+  // ── addPlanning: crea en estado local Y sincroniza con API ─
+  const addPlanning = async (planningData: Omit<Planning, 'id' | 'details'>) => {
+    const newId = `p${Date.now()}`;
     const newPlanning: Planning = {
       ...planningData,
-      id: `p${Date.now()}`,
-      details: {
-        spliceCapacity: '',
-        photos: []
-      }
+      id: newId,
+      details: { spliceCapacity: '', photos: [] },
     };
-    setPlannings([...plannings, newPlanning]);
+
+    // Actualizar estado local inmediatamente (UX responsive)
+    setPlannings(prev => [...prev, newPlanning]);
+
+    // Sincronizar con API en segundo plano
+    if (isApiConnected) {
+      try {
+        await createPlanningApi({
+          id:             newId,
+          site_id:        planningData.siteId,
+          worker_id:      planningData.workerId,
+          status:         planningData.status || 'Planificado',
+          scheduled_date: planningData.date,
+          created_by:     currentUser?.id,
+        });
+        console.log(`✅ Planificación ${newId} sincronizada con PostgreSQL`);
+      } catch (error) {
+        console.log('⚠️ Error sincronizando planificación con API:', error);
+      }
+    }
   };
 
-  const updatePlanning = (id: string, updatedData: Partial<Planning>) => {
+  // ── updatePlanning: actualiza local Y sincroniza con API ──
+  const updatePlanning = async (id: string, updatedData: Partial<Planning>) => {
     setPlannings(prev => prev.map(p => (p.id === id ? { ...p, ...updatedData } : p)));
+
+    // Sincronizar cambios de estado/tiempo con la API
+    if (isApiConnected && (updatedData.status || updatedData.startTime || updatedData.endTime)) {
+      try {
+        await updatePlanningApi(id, {
+          status:     updatedData.status,
+          start_time: updatedData.startTime || null,
+          end_time:   updatedData.endTime   || null,
+        });
+        console.log(`✅ Planificación ${id} actualizada en PostgreSQL`);
+      } catch (error) {
+        console.log('⚠️ Error actualizando planificación en API:', error);
+      }
+    }
   };
 
   const updateSite = (id: string, updatedData: Partial<Site>) => {
@@ -290,20 +410,21 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   return (
-    <AppContext.Provider value={{ 
-      users, 
-      sites, 
-      plannings, 
-      currentUser, 
-      setCurrentUser, 
-      loadingSession, 
-      logout, 
-      addUser, 
-      updateUser, 
-      setCurrentUserRole, 
-      addPlanning, 
-      updatePlanning, 
-      updateSite 
+    <AppContext.Provider value={{
+      users,
+      sites,
+      plannings,
+      currentUser,
+      setCurrentUser,
+      loadingSession,
+      isApiConnected,
+      logout,
+      addUser,
+      updateUser,
+      setCurrentUserRole,
+      addPlanning,
+      updatePlanning,
+      updateSite,
     }}>
       {children}
     </AppContext.Provider>

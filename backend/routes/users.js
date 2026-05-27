@@ -51,11 +51,26 @@ router.post('/', async (req, res) => {
 // PUT /api/users/:id — Actualizar usuario
 router.put('/:id', async (req, res) => {
   try {
-    const { name, email, phone, company, role, photo_url, status } = req.body;
+    const { name, email, phone, company, role, photo_url, status, latitude, longitude } = req.body;
     const result = await pool.query(
       `UPDATE users SET name=$1, email=$2, phone=$3, company=$4, role=$5,
-       photo_url=$6, status=$7 WHERE id=$8 RETURNING *`,
-      [name, email, phone, company, role, photo_url, status, req.params.id]
+       photo_url=$6, status=$7, latitude=COALESCE($8, latitude), longitude=COALESCE($9, longitude) WHERE id=$10 RETURNING *`,
+      [name, email, phone, company, role, photo_url, status, latitude, longitude, req.params.id]
+    );
+    if (!result.rowCount) return res.status(404).json({ success: false, error: 'Usuario no encontrado' });
+    res.json({ success: true, data: result.rows[0] });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// PUT /api/users/:id/location — Actualizar georreferenciación del usuario
+router.put('/:id/location', async (req, res) => {
+  try {
+    const { latitude, longitude } = req.body;
+    const result = await pool.query(
+      `UPDATE users SET latitude=$1, longitude=$2, updated_at=CURRENT_TIMESTAMP WHERE id=$3 RETURNING *`,
+      [latitude, longitude, req.params.id]
     );
     if (!result.rowCount) return res.status(404).json({ success: false, error: 'Usuario no encontrado' });
     res.json({ success: true, data: result.rows[0] });

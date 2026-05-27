@@ -12,8 +12,10 @@ const STATUS_COLORS: Record<string, string> = {
   'Ejecutado':    '#30D158',
   'En ejecución': '#FF9500',
   'Pospuesto':    '#FF453A',
+  'Planificado':  '#0A84FF',
+  'Sin asignar':  '#8E8E93',
 };
-const DEFAULT_COLOR = '#2196F3';
+const DEFAULT_COLOR = '#8E8E93';
 
 interface SiteMarkerProps {
   coordinate: { latitude: number; longitude: number };

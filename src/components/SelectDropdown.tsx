@@ -50,7 +50,11 @@ export const SelectDropdown: React.FC<SelectDropdownProps> = ({
         onPress={() => !disabled && setVisible(true)}
         activeOpacity={disabled ? 1 : 0.7}
       >
-        <Text style={[styles.selectorText, !selectedOption && styles.placeholder]}>
+        <Text style={[
+          styles.selectorText, 
+          !selectedOption && styles.placeholder,
+          disabled && styles.disabledText
+        ]}>
           {selectedOption ? selectedOption.label : placeholder}
         </Text>
         <Ionicons name="chevron-down" size={20} color={disabled ? 'transparent' : colors.textSecondary} />
@@ -123,12 +127,17 @@ const styles = StyleSheet.create({
   },
   disabledSelector: {
     backgroundColor: 'rgba(255, 255, 255, 0.05)',
-    borderColor: 'rgba(255, 255, 255, 0.15)',
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: 12,
     opacity: 1,
   },
   selectorText: {
     fontSize: 16,
     color: colors.text,
+  },
+  disabledText: {
+    color: '#fff',
+    fontSize: 17,
   },
   placeholder: {
     color: colors.textSecondary,

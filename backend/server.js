@@ -5,16 +5,20 @@ require('dotenv').config();
 const app  = express();
 const PORT = process.env.PORT || 3001;
 
+const path = require('path');
+
 // ── Middlewares ──────────────────────────────────────────────
 app.use(cors());
 app.use(express.json());
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // ── Rutas ────────────────────────────────────────────────────
-app.use('/api/users',     require('./routes/users'));
-app.use('/api/sites',     require('./routes/sites'));
-app.use('/api/plannings', require('./routes/plannings'));
-app.use('/api/photos',    require('./routes/photos'));
-app.use('/api/reports',   require('./routes/reports'));
+app.use('/api/users',         require('./routes/users'));
+app.use('/api/sites',         require('./routes/sites'));
+app.use('/api/plannings',     require('./routes/plannings'));
+app.use('/api/photos',        require('./routes/photos'));
+app.use('/api/reports',       require('./routes/reports'));
+app.use('/api/notifications', require('./routes/notifications'));
 
 // ── Health check ─────────────────────────────────────────────
 app.get('/', (req, res) => {

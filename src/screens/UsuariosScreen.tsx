@@ -9,7 +9,10 @@ import {
   Dimensions, 
   Animated,
   Platform,
-  PanResponder
+  PanResponder,
+  Linking,
+  Alert,
+  ScrollView
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../theme/colors';
@@ -25,9 +28,12 @@ export const UsuariosScreen = ({ navigation }: any) => {
   const usersContext = context?.users || [];
   const currentUser = context?.currentUser;
 
-  // Si el usuario actual es Coordinador, solo ve a los trabajadores
+  // Si el usuario actual es Coordinador, solo ve a los trabajadores (a menos que sea Fernando Aldao)
   const users = usersContext.filter(user => {
     if (currentUser?.role === 'Coordinador') {
+      if (currentUser?.name === 'Fernando Aldao' || currentUser?.email === 'fernando.aldao@f1.services') {
+        return user.role === 'Trabajador' || user.role === 'Coordinador';
+      }
       return user.role === 'Trabajador';
     }
     return true; // Administrador o superusuario ven todos
@@ -148,7 +154,10 @@ export const UsuariosScreen = ({ navigation }: any) => {
       </View>
       <View style={styles.userListInfo}>
         <Text style={styles.listUserName}>{item.name}</Text>
-        <Text style={styles.listUserDetail}>{item.role} • {item.company}</Text>
+        <Text style={styles.listUserDetail}>
+          {item.role} • {item.company}
+          {(currentUser?.role === 'Coordinador' || currentUser?.role === 'Administrador') && ` • ${item.phone}`}
+        </Text>
       </View>
       <Ionicons name="chevron-forward" size={20} color="rgba(255,255,255,0.3)" />
     </TouchableOpacity>
@@ -186,12 +195,15 @@ export const UsuariosScreen = ({ navigation }: any) => {
       {/* Main Screen Content */}
       <View style={styles.mainScreenContent}>
         {selectedUser ? (
-          <View style={styles.detailContent}>
+          <ScrollView 
+            style={styles.detailContent}
+            contentContainerStyle={{ paddingBottom: SHEET_MIN_HEIGHT + 20 }}
+            showsVerticalScrollIndicator={false}
+          >
             <View style={styles.detailHeader}>
               <Image source={{ uri: selectedUser.photo }} style={styles.detailAvatar} />
               <View style={styles.detailTitleInfo}>
                 <Text style={styles.detailName}>{selectedUser.name}</Text>
-                <Text style={styles.detailStatus}>En Terreno • Hoy, 10:45</Text>
               </View>
               <TouchableOpacity 
                 style={styles.closeModalBtn}
@@ -202,23 +214,60 @@ export const UsuariosScreen = ({ navigation }: any) => {
             </View>
 
             <View style={styles.actionRow}>
-              <TouchableOpacity style={styles.actionBtn}>
+              <TouchableOpacity 
+                style={styles.actionBtn}
+                onPress={() => {
+                  if (selectedUser.phone) {
+                    Linking.openURL(`tel:${selectedUser.phone}`);
+                  } else {
+                    Alert.alert('Error', 'Este usuario no tiene teléfono registrado.');
+                  }
+                }}
+              >
                 <View style={styles.actionIconCircle}>
                   <Ionicons name="call" size={24} color="#fff" />
                 </View>
                 <Text style={styles.actionText}>Llamar</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.actionBtn}>
-                <View style={styles.actionIconCircle}>
-                  <Ionicons name="mail" size={24} color="#fff" />
+              
+              <TouchableOpacity 
+                style={styles.actionBtn}
+                onPress={() => {
+                  if (selectedUser.phone) {
+                    const cleanPhone = selectedUser.phone.replace(/[^0-9]/g, '');
+                    const url = `https://wa.me/${cleanPhone}`;
+                    Linking.openURL(url).catch(() => {
+                      Alert.alert('Error', 'No se pudo abrir WhatsApp. Verifica si está instalado.');
+                    });
+                  } else {
+                    Alert.alert('Error', 'Este usuario no tiene teléfono registrado.');
+                  }
+                }}
+              >
+                <View style={[styles.actionIconCircle, { backgroundColor: '#25D366' }]}>
+                  <Ionicons name="logo-whatsapp" size={24} color="#fff" />
                 </View>
-                <Text style={styles.actionText}>Mensaje</Text>
+                <Text style={[styles.actionText, { color: '#25D366' }]}>WhatsApp</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.actionBtn}>
-                <View style={styles.actionIconCircle}>
-                  <Ionicons name="navigate" size={24} color="#fff" />
+
+              <TouchableOpacity 
+                style={styles.actionBtn}
+                onPress={() => {
+                  const hasLiveCoords = selectedUser.latitude !== undefined && selectedUser.latitude !== null && selectedUser.longitude !== undefined && selectedUser.longitude !== null;
+                  if (hasLiveCoords) {
+                    navigation.navigate('Actividad', { autoSelectWorkerId: selectedUser.id });
+                  } else {
+                    Alert.alert(
+                      'GPS Inactivo',
+                      `${selectedUser.name} no tiene su GPS activo por lo cual no puede mostrarse en el mapa.`
+                    );
+                  }
+                }}
+              >
+                <View style={[styles.actionIconCircle, { backgroundColor: '#FF5E00' }]}>
+                  <Ionicons name="location" size={24} color="#fff" />
                 </View>
-                <Text style={styles.actionText}>Ruta</Text>
+                <Text style={[styles.actionText, { color: '#FF5E00' }]}>Ubicación</Text>
               </TouchableOpacity>
             </View>
 
@@ -244,6 +293,15 @@ export const UsuariosScreen = ({ navigation }: any) => {
                   <Text style={styles.infoValue}>{selectedUser.email}</Text>
                 </View>
               </View>
+              {(currentUser?.role === 'Coordinador' || currentUser?.role === 'Administrador') && (
+                <View style={styles.infoRow}>
+                  <Ionicons name="call" size={20} color="rgba(255,255,255,0.5)" />
+                  <View style={styles.infoTextContainer}>
+                    <Text style={styles.infoLabel}>Teléfono</Text>
+                    <Text style={styles.infoValue}>{selectedUser.phone}</Text>
+                  </View>
+                </View>
+              )}
             </View>
 
             <TouchableOpacity 
@@ -254,7 +312,7 @@ export const UsuariosScreen = ({ navigation }: any) => {
             >
               <Text style={styles.editFullBtnText}>Editar Información</Text>
             </TouchableOpacity>
-          </View>
+          </ScrollView>
         ) : (
           <View style={styles.placeholderContainer}>
             <Ionicons name="people" size={80} color="rgba(255,255,255,0.05)" />
@@ -271,7 +329,7 @@ export const UsuariosScreen = ({ navigation }: any) => {
           </TouchableOpacity>
         </View>
         
-        <Animated.View style={{ flex: 1, opacity: contentOpacity, marginBottom: Platform.OS === 'android' ? 85 : 70 }}>
+        <Animated.View style={{ flex: 1, opacity: contentOpacity, marginBottom: 70 }}>
           <Text style={styles.sheetTitle}>Directorio</Text>
           <View style={styles.listContainer}>
             <FlatList
@@ -369,7 +427,7 @@ const styles = StyleSheet.create({
   },
   bottomSheet: {
     position: 'absolute',
-    bottom: 15,
+    bottom: Platform.OS === 'android' ? 50 : 15,
     left: 15,
     right: 15,
     backgroundColor: 'rgba(28, 28, 30, 0.95)',
@@ -459,30 +517,29 @@ const styles = StyleSheet.create({
   // Detail Content Styles
   detailContent: {
     flex: 1,
-    paddingBottom: SHEET_MIN_HEIGHT, // Ensure it doesn't overlap with the minimized sheet
   },
   detailHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 24,
+    marginBottom: 15,
   },
   detailAvatar: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
+    width: 60,
+    height: 60,
+    borderRadius: 30,
     backgroundColor: '#333',
   },
   detailTitleInfo: {
-    marginLeft: 20,
+    marginLeft: 16,
     flex: 1,
   },
   detailName: {
-    fontSize: 24,
+    fontSize: 22,
     fontWeight: '700',
     color: '#fff',
   },
   detailStatus: {
-    fontSize: 15,
+    fontSize: 14,
     color: '#34C759',
     marginTop: 4,
   },
@@ -492,64 +549,64 @@ const styles = StyleSheet.create({
   actionRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginBottom: 32,
+    marginBottom: 16,
   },
   actionBtn: {
     width: (SCREEN_WIDTH - 60) / 3,
     backgroundColor: 'rgba(255,255,255,0.05)',
     borderRadius: 12,
-    paddingVertical: 12,
+    paddingVertical: 8,
     alignItems: 'center',
   },
   actionIconCircle: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     backgroundColor: '#007AFF',
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 8,
+    marginBottom: 4,
   },
   actionText: {
     color: '#007AFF',
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '600',
   },
   infoSection: {
     backgroundColor: 'rgba(255,255,255,0.05)',
     borderRadius: 16,
-    padding: 16,
-    marginBottom: 24,
+    padding: 12,
+    marginBottom: 16,
   },
   infoRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 16,
+    marginBottom: 10,
   },
   infoTextContainer: {
-    marginLeft: 16,
+    marginLeft: 12,
     flex: 1,
   },
   infoLabel: {
-    fontSize: 12,
+    fontSize: 11,
     color: 'rgba(255,255,255,0.4)',
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
   infoValue: {
-    fontSize: 16,
+    fontSize: 15,
     color: '#fff',
     marginTop: 2,
   },
   editFullBtn: {
     backgroundColor: 'rgba(255,255,255,0.1)',
     borderRadius: 12,
-    paddingVertical: 16,
+    paddingVertical: 12,
     alignItems: 'center',
   },
   editFullBtnText: {
     color: '#fff',
-    fontSize: 17,
+    fontSize: 16,
     fontWeight: '600',
   }
 });

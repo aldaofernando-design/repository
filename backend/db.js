@@ -1,4 +1,6 @@
-const { Pool } = require('pg');
+const { Pool, types } = require('pg');
+types.setTypeParser(1082, (val) => val); // Return DATE columns as YYYY-MM-DD raw strings
+
 require('dotenv').config();
 
 // En macOS con Homebrew, PostgreSQL usa el usuario del sistema sin contraseña

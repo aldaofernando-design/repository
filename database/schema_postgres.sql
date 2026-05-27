@@ -14,6 +14,7 @@ DROP TABLE IF EXISTS datos_generales CASCADE;
 DROP TABLE IF EXISTS plannings CASCADE;
 DROP TABLE IF EXISTS sites CASCADE;
 DROP TABLE IF EXISTS users CASCADE;
+DROP TABLE IF EXISTS notifications CASCADE;
 
 -- ============================================================
 -- 1. TABLA: users
@@ -28,6 +29,8 @@ CREATE TABLE users (
     role        VARCHAR(30)  NOT NULL CHECK (role IN ('Administrador', 'Coordinador', 'Trabajador')),
     photo_url   TEXT,
     status      VARCHAR(20)  DEFAULT 'Activo' CHECK (status IN ('Activo', 'Inactivo')),
+    latitude    DECIMAL(10, 7),
+    longitude   DECIMAL(10, 7),
     created_at  TIMESTAMP    DEFAULT CURRENT_TIMESTAMP,
     updated_at  TIMESTAMP    DEFAULT CURRENT_TIMESTAMP
 );
@@ -45,7 +48,7 @@ CREATE TABLE sites (
     latitude        DECIMAL(10, 7),
     longitude       DECIMAL(10, 7),
     region          INTEGER,
-    estado_excel    VARCHAR(50)  DEFAULT 'Sin Asignar',
+    estado_excel    VARCHAR(50)  DEFAULT 'Sin asignar',
     proyecto        VARCHAR(100),
     apagado_bafi    BOOLEAN      DEFAULT FALSE,
     created_at      TIMESTAMP    DEFAULT CURRENT_TIMESTAMP
@@ -182,9 +185,24 @@ CREATE TABLE audit_log (
 );
 
 -- ============================================================
+-- 10. TABLA: notifications
+-- Notificaciones para trabajadores (ej: asignación/reapertura de sitio)
+-- ============================================================
+CREATE TABLE notifications (
+    id              SERIAL       PRIMARY KEY,
+    worker_id       VARCHAR(50)  NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    type            VARCHAR(50)  NOT NULL, -- 'planning_created', 'planning_reopened'
+    message         TEXT         NOT NULL,
+    is_read         BOOLEAN      DEFAULT FALSE,
+    planning_id     VARCHAR(50)  REFERENCES plannings(id) ON DELETE CASCADE,
+    created_at      TIMESTAMP    DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================================
 -- ÍNDICES para mejor performance
 -- ============================================================
 CREATE INDEX idx_plannings_site_id     ON plannings(site_id);
+CREATE INDEX idx_notifications_worker  ON notifications(worker_id);
 CREATE INDEX idx_plannings_worker_id   ON plannings(worker_id);
 CREATE INDEX idx_plannings_status      ON plannings(status);
 CREATE INDEX idx_plannings_date        ON plannings(scheduled_date);

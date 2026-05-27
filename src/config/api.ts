@@ -5,7 +5,7 @@
  */
 
 // IP del Mac en la red local (obtenida automáticamente)
-const API_LOCAL_IP = '192.168.0.44';
+const API_LOCAL_IP = '192.168.1.84';
 const API_PORT     = 3001;
 
 // En desarrollo usa la IP local, en producción usa un dominio

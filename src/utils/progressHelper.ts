@@ -7,7 +7,7 @@ export const calculatePlanningProgress = (planning: Planning | undefined, site: 
   const calculateDatosProgress = () => {
     const dg = planning.datosGenerales;
     if (!dg) return 0;
-    const totalFields = dg.tipoEmpalme === 'Trifásico' ? 17 : 15;
+    const totalFields = dg.tipoEmpalme === 'Trifásico' ? 19 : 17;
     let completedFields = 0;
     if (dg.tipoEstructura) completedFields++;
     if (dg.fotoEstructura) completedFields++;
@@ -23,6 +23,8 @@ export const calculatePlanningProgress = (planning: Planning | undefined, site: 
     if (dg.fotoSectorMedidor) completedFields++;
     if (dg.numeroMedidor) completedFields++;
     if (dg.lecturaConsumo) completedFields++;
+    if (dg.fotoDisplayRectificador) completedFields++;
+    if (dg.ampereDisplayRectificador) completedFields++;
     
     if (dg.tipoEmpalme === 'Monofásico') {
       if (dg.fotosEmpalme && dg.fotosEmpalme[0]) completedFields++;
@@ -91,35 +93,22 @@ export const calculatePlanningProgress = (planning: Planning | undefined, site: 
     const bafi = planning.apagadoBafiSector1;
     if (!bafi) return 0;
     const estado = bafi.estadoBasebandSector1;
-    const tipoEmpalme = planning.datosGenerales?.tipoEmpalme;
-    const isTrifasico = tipoEmpalme === 'Trifásico';
 
     if (estado === 'Encendido') {
-      const total = isTrifasico ? 10 : 6;
+      const total = 6;
       let completed = 0;
       if (bafi.fotoBreakerBaseband1Encendido) completed++;
       if (bafi.fotoBaseband1Encendida) completed++;
+      if (bafi.fotoConsumoInicialCc) completed++;
       if (bafi.fotoBreakerBaseband1Apagado) completed++;
+      if (bafi.fotoConsumoFinalCc) completed++;
       if (bafi.fotoEspacioBaseband1Retirada) completed++;
-      
-      const cf = bafi.fotosConsumoFinal || [];
-      const am = bafi.ampereConsumoFinal || [];
-      if (isTrifasico) {
-        if (cf[0]) completed++;
-        if (cf[1]) completed++;
-        if (cf[2]) completed++;
-        if (am[0] && am[0] !== '00,00') completed++;
-        if (am[1] && am[1] !== '00,00') completed++;
-        if (am[2] && am[2] !== '00,00') completed++;
-      } else {
-        if (cf[0]) completed++;
-        if (am[0] && am[0] !== '00,00') completed++;
-      }
       return Math.round((completed / total) * 100);
     } else if (estado === 'Apagado') {
-      const total = 2;
+      const total = 3;
       let completed = 0;
       if (bafi.fotoBreakerBaseband1Apagado) completed++;
+      if (bafi.fotoConsumoFinalCc) completed++;
       if (bafi.fotoEspacioBaseband1Retirada) completed++;
       return Math.round((completed / total) * 100);
     } else if (estado === 'N/A') {
@@ -132,35 +121,22 @@ export const calculatePlanningProgress = (planning: Planning | undefined, site: 
     const bafi = planning.apagadoBafiSector2;
     if (!bafi) return 0;
     const estado = bafi.estadoBasebandSector2;
-    const tipoEmpalme = planning.datosGenerales?.tipoEmpalme;
-    const isTrifasico = tipoEmpalme === 'Trifásico';
 
     if (estado === 'Encendido') {
-      const total = isTrifasico ? 10 : 6;
+      const total = 6;
       let completed = 0;
       if (bafi.fotoBreakerBaseband2Encendido) completed++;
       if (bafi.fotoBaseband2Encendida) completed++;
+      if (bafi.fotoConsumoInicialCc) completed++;
       if (bafi.fotoBreakerBaseband2Apagado) completed++;
+      if (bafi.fotoConsumoFinalCc) completed++;
       if (bafi.fotoEspacioBaseband2Retirada) completed++;
-      
-      const cf = bafi.fotosConsumoFinal || [];
-      const am = bafi.ampereConsumoFinal || [];
-      if (isTrifasico) {
-        if (cf[0]) completed++;
-        if (cf[1]) completed++;
-        if (cf[2]) completed++;
-        if (am[0] && am[0] !== '00,00') completed++;
-        if (am[1] && am[1] !== '00,00') completed++;
-        if (am[2] && am[2] !== '00,00') completed++;
-      } else {
-        if (cf[0]) completed++;
-        if (am[0] && am[0] !== '00,00') completed++;
-      }
       return Math.round((completed / total) * 100);
     } else if (estado === 'Apagado') {
-      const total = 2;
+      const total = 3;
       let completed = 0;
       if (bafi.fotoBreakerBaseband2Apagado) completed++;
+      if (bafi.fotoConsumoFinalCc) completed++;
       if (bafi.fotoEspacioBaseband2Retirada) completed++;
       return Math.round((completed / total) * 100);
     } else if (estado === 'N/A') {
@@ -173,35 +149,22 @@ export const calculatePlanningProgress = (planning: Planning | undefined, site: 
     const bafi = planning.apagadoBafiSector3;
     if (!bafi) return 0;
     const estado = bafi.estadoBasebandSector3;
-    const tipoEmpalme = planning.datosGenerales?.tipoEmpalme;
-    const isTrifasico = tipoEmpalme === 'Trifásico';
 
     if (estado === 'Encendido') {
-      const total = isTrifasico ? 10 : 6;
+      const total = 6;
       let completed = 0;
       if (bafi.fotoBreakerBaseband3Encendido) completed++;
       if (bafi.fotoBaseband3Encendida) completed++;
+      if (bafi.fotoConsumoInicialCc) completed++;
       if (bafi.fotoBreakerBaseband3Apagado) completed++;
+      if (bafi.fotoConsumoFinalCc) completed++;
       if (bafi.fotoEspacioBaseband3Retirada) completed++;
-      
-      const cf = bafi.fotosConsumoFinal || [];
-      const am = bafi.ampereConsumoFinal || [];
-      if (isTrifasico) {
-        if (cf[0]) completed++;
-        if (cf[1]) completed++;
-        if (cf[2]) completed++;
-        if (am[0] && am[0] !== '00,00') completed++;
-        if (am[1] && am[1] !== '00,00') completed++;
-        if (am[2] && am[2] !== '00,00') completed++;
-      } else {
-        if (cf[0]) completed++;
-        if (am[0] && am[0] !== '00,00') completed++;
-      }
       return Math.round((completed / total) * 100);
     } else if (estado === 'Apagado') {
-      const total = 2;
+      const total = 3;
       let completed = 0;
       if (bafi.fotoBreakerBaseband3Apagado) completed++;
+      if (bafi.fotoConsumoFinalCc) completed++;
       if (bafi.fotoEspacioBaseband3Retirada) completed++;
       return Math.round((completed / total) * 100);
     } else if (estado === 'N/A') {
@@ -213,45 +176,15 @@ export const calculatePlanningProgress = (planning: Planning | undefined, site: 
   const calculateAntenaSector1Progress = () => {
     const antena = planning.apagadoAntenaSector1;
     if (!antena) return 0;
-    const estado = antena.estadoAntenaSector1;
-    const tipoEmpalme = planning.datosGenerales?.tipoEmpalme;
-    const isTrifasico = tipoEmpalme === 'Trifásico';
-
-    if (estado === 'Encendida') {
-      if (antena.seApagaraAntenaS1 === 'Si') {
-        const total = isTrifasico ? 9 : 5;
-        let completed = 0;
-        if (antena.fotoBreakerAntenaS1Encendido) completed++;
-        if (antena.seApagaraAntenaS1) completed++;
-        if (antena.fotoBreakerAntenaS1Apagado) completed++;
-
-        const cf = antena.fotosConsumoFinal || [];
-        const am = antena.ampereConsumoFinal || [];
-        if (isTrifasico) {
-          if (cf[0]) completed++;
-          if (cf[1]) completed++;
-          if (cf[2]) completed++;
-          if (am[0] && am[0] !== '00,00') completed++;
-          if (am[1] && am[1] !== '00,00') completed++;
-          if (am[2] && am[2] !== '00,00') completed++;
-        } else {
-          if (cf[0]) completed++;
-          if (am[0] && am[0] !== '00,00') completed++;
-        }
-        return Math.round((completed / total) * 100);
-      } else {
-        const total = 2;
-        let completed = 0;
-        if (antena.fotoBreakerAntenaS1Encendido) completed++;
-        if (antena.seApagaraAntenaS1) completed++;
-        return Math.round((completed / total) * 100);
-      }
-    } else if (estado === 'Apagada') {
-      const total = 1;
+    if (antena.seApagaraAntenaS1 === 'Si') {
+      const total = 4;
       let completed = 0;
+      if (antena.fotoBreakerAntenaS1Encendido) completed++;
+      if (antena.fotoConsumoInicialCc) completed++;
       if (antena.fotoBreakerAntenaS1Apagado) completed++;
+      if (antena.fotoConsumoFinalCc) completed++;
       return Math.round((completed / total) * 100);
-    } else if (estado === 'N/A') {
+    } else if (antena.seApagaraAntenaS1 === 'No' || antena.seApagaraAntenaS1 === 'N/A') {
       return 100;
     }
     return 0;
@@ -260,45 +193,15 @@ export const calculatePlanningProgress = (planning: Planning | undefined, site: 
   const calculateAntenaSector2Progress = () => {
     const antena = planning.apagadoAntenaSector2;
     if (!antena) return 0;
-    const estado = antena.estadoAntenaSector2;
-    const tipoEmpalme = planning.datosGenerales?.tipoEmpalme;
-    const isTrifasico = tipoEmpalme === 'Trifásico';
-
-    if (estado === 'Encendida') {
-      if (antena.seApagaraAntenaS2 === 'Si') {
-        const total = isTrifasico ? 9 : 5;
-        let completed = 0;
-        if (antena.fotoBreakerAntenaS2Encendido) completed++;
-        if (antena.seApagaraAntenaS2) completed++;
-        if (antena.fotoBreakerAntenaS2Apagado) completed++;
-
-        const cf = antena.fotosConsumoFinal || [];
-        const am = antena.ampereConsumoFinal || [];
-        if (isTrifasico) {
-          if (cf[0]) completed++;
-          if (cf[1]) completed++;
-          if (cf[2]) completed++;
-          if (am[0] && am[0] !== '00,00') completed++;
-          if (am[1] && am[1] !== '00,00') completed++;
-          if (am[2] && am[2] !== '00,00') completed++;
-        } else {
-          if (cf[0]) completed++;
-          if (am[0] && am[0] !== '00,00') completed++;
-        }
-        return Math.round((completed / total) * 100);
-      } else {
-        const total = 2;
-        let completed = 0;
-        if (antena.fotoBreakerAntenaS2Encendido) completed++;
-        if (antena.seApagaraAntenaS2) completed++;
-        return Math.round((completed / total) * 100);
-      }
-    } else if (estado === 'Apagada') {
-      const total = 1;
+    if (antena.seApagaraAntenaS2 === 'Si') {
+      const total = 4;
       let completed = 0;
+      if (antena.fotoBreakerAntenaS2Encendido) completed++;
+      if (antena.fotoConsumoInicialCc) completed++;
       if (antena.fotoBreakerAntenaS2Apagado) completed++;
+      if (antena.fotoConsumoFinalCc) completed++;
       return Math.round((completed / total) * 100);
-    } else if (estado === 'N/A') {
+    } else if (antena.seApagaraAntenaS2 === 'No' || antena.seApagaraAntenaS2 === 'N/A') {
       return 100;
     }
     return 0;
@@ -307,45 +210,15 @@ export const calculatePlanningProgress = (planning: Planning | undefined, site: 
   const calculateAntenaSector3Progress = () => {
     const antena = planning.apagadoAntenaSector3;
     if (!antena) return 0;
-    const estado = antena.estadoAntenaSector3;
-    const tipoEmpalme = planning.datosGenerales?.tipoEmpalme;
-    const isTrifasico = tipoEmpalme === 'Trifásico';
-
-    if (estado === 'Encendida') {
-      if (antena.seApagaraAntenaS3 === 'Si') {
-        const total = isTrifasico ? 9 : 5;
-        let completed = 0;
-        if (antena.fotoBreakerAntenaS3Encendido) completed++;
-        if (antena.seApagaraAntenaS3) completed++;
-        if (antena.fotoBreakerAntenaS3Apagado) completed++;
-
-        const cf = antena.fotosConsumoFinal || [];
-        const am = antena.ampereConsumoFinal || [];
-        if (isTrifasico) {
-          if (cf[0]) completed++;
-          if (cf[1]) completed++;
-          if (cf[2]) completed++;
-          if (am[0] && am[0] !== '00,00') completed++;
-          if (am[1] && am[1] !== '00,00') completed++;
-          if (am[2] && am[2] !== '00,00') completed++;
-        } else {
-          if (cf[0]) completed++;
-          if (am[0] && am[0] !== '00,00') completed++;
-        }
-        return Math.round((completed / total) * 100);
-      } else {
-        const total = 2;
-        let completed = 0;
-        if (antena.fotoBreakerAntenaS3Encendido) completed++;
-        if (antena.seApagaraAntenaS3) completed++;
-        return Math.round((completed / total) * 100);
-      }
-    } else if (estado === 'Apagada') {
-      const total = 1;
+    if (antena.seApagaraAntenaS3 === 'Si') {
+      const total = 4;
       let completed = 0;
+      if (antena.fotoBreakerAntenaS3Encendido) completed++;
+      if (antena.fotoConsumoInicialCc) completed++;
       if (antena.fotoBreakerAntenaS3Apagado) completed++;
+      if (antena.fotoConsumoFinalCc) completed++;
       return Math.round((completed / total) * 100);
-    } else if (estado === 'N/A') {
+    } else if (antena.seApagaraAntenaS3 === 'No' || antena.seApagaraAntenaS3 === 'N/A') {
       return 100;
     }
     return 0;

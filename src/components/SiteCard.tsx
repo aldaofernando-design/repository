@@ -30,7 +30,7 @@ export const SiteCard: React.FC<SiteCardProps> = ({ site, status, workerName }) 
           </View>
           <View style={[styles.badge, { backgroundColor: getStatusColor(status) + '20' }]}>
             <Text style={[styles.badgeText, { color: getStatusColor(status) }]}>
-              {status || site.estadoExcel || 'Sin Asignar'}
+              {status || site.estadoExcel || 'Sin asignar'}
             </Text>
           </View>
         </View>

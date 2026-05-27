@@ -9,8 +9,10 @@ import { colors } from '../theme/colors';
 import { AppContext } from '../context/AppContext';
 import { exportDatabase } from '../services/exportService';
 import { SiteMarker } from '../components/MapMarkerBitmap';
-import { getElapsedTime } from '../services/timeUtils';
+import { getElapsedTime, getSantiagoTodayString } from '../services/timeUtils';
 import { calculatePlanningProgress, getReportProgressColor } from '../utils/progressHelper';
+import { DownloadProgressModal } from '../components/DownloadProgressModal';
+import { useReportDownloader } from '../utils/downloadHelper';
 
 
 // Configurar calendario en español
@@ -36,9 +38,18 @@ export const SitiosScreen = ({ navigation }: any) => {
   const users = context?.users || [];
   const currentUser = context?.currentUser;
   const addPlanning = context?.addPlanning;
+  const updatePlanning = context?.updatePlanning;
+  const fetchAndSyncPlanning = context?.fetchAndSyncPlanning;
+  const isApiConnected = context?.isApiConnected || false;
 
-  const today = new Date();
-  const todayString = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+  const {
+    visible: dlVisible,
+    progress: dlProgress,
+    status: dlStatus,
+    startDownload
+  } = useReportDownloader(fetchAndSyncPlanning as any, isApiConnected);
+
+  const todayString = getSantiagoTodayString();
 
   const [locationPermission, setLocationPermission] = useState(false);
   const [isPlanningModalVisible, setIsPlanningModalVisible] = useState(false);
@@ -55,7 +66,7 @@ export const SitiosScreen = ({ navigation }: any) => {
   const [selectedProject, setSelectedProject] = useState('Todos');
 
   const uniqueProjects = ['Todos', ...Array.from(new Set(sites.map(s => s.proyecto).filter((p): p is string => typeof p === 'string')))];
-  const statuses = ['Todos', 'Planificado', 'Ejecutado', 'Pospuesto', 'Sin Asignar'];
+  const statuses = ['Todos', 'Ejecutado', 'En ejecución', 'Planificado', 'Pospuesto', 'Sin asignar'];
 
   const projectOptions = uniqueProjects.map(p => ({ id: p, label: p }));
   const statusOptions = statuses.map(s => ({ id: s, label: s }));
@@ -190,7 +201,7 @@ export const SitiosScreen = ({ navigation }: any) => {
 
   const getDynamicStatus = (site: any) => {
     const sitePlanning = plannings.find(p => p.siteId === site.id);
-    return sitePlanning ? sitePlanning.status : (site.estadoExcel || 'Sin Asignar');
+    return sitePlanning ? sitePlanning.status : (site.estadoExcel || 'Sin asignar');
   };
 
   const filteredSites = sites.filter(site => {
@@ -203,12 +214,12 @@ export const SitiosScreen = ({ navigation }: any) => {
     return matchesSearch && matchesStatus && matchesProject;
   });
 
-
-
   const renderSiteItem = ({ item }: { item: any }) => {
     const status = getDynamicStatus(item);
     const statusColor = status === 'Ejecutado' ? '#30D158' : 
-                        status === 'En ejecución' ? '#FF9500' : '#0A84FF';
+                        status === 'En ejecución' ? '#FF9500' : 
+                        status === 'Pospuesto' ? '#FF453A' :
+                        status === 'Planificado' ? '#0A84FF' : '#8E8E93';
     return (
       <TouchableOpacity 
         style={styles.listItem}
@@ -286,9 +297,9 @@ export const SitiosScreen = ({ navigation }: any) => {
         return '#0A84FF';
       case 'Ejecutado':
         return '#30D158';
-      case 'Sin Asignar':
+      case 'Sin asignar':
       default:
-        return 'rgba(255, 255, 255, 0.4)';
+        return '#8E8E93';
     }
   };
 
@@ -301,12 +312,12 @@ export const SitiosScreen = ({ navigation }: any) => {
         return `Pospuesto • Tenía asignado a: ${name} • Desde el ${formatDateStr(planning?.date)}`;
       case 'Planificado':
         return `Planificado • Asignado a: ${name} • Para el ${formatDateStr(planning?.date)}`;
-      case 'Sin Asignar':
-        return 'Sin Asignar';
+      case 'Sin asignar':
+        return 'Sin asignar';
       case 'Ejecutado':
         return `Ejecutado • Realizado por: ${name}${planning?.endTime ? ` • El ${formatDateTimeStr(planning.endTime)}` : ''}`;
       default:
-        return status || 'Sin Asignar';
+        return status || 'Sin asignar';
     }
   };
 
@@ -327,22 +338,85 @@ export const SitiosScreen = ({ navigation }: any) => {
       return;
     }
 
-    const existingPlanning = plannings.find(p => p.siteId === selectedSite.id && p.date === modalSelectedDate);
-    if (existingPlanning) {
-      Alert.alert('Sitio ya planificado', 'Este sitio ya está planificado para este día.');
+    if (modalSelectedDate < todayString) {
+      Alert.alert('Restricción', 'No puedes planificar o replanificar para una fecha anterior a la de hoy.');
       return;
     }
 
-    if (addPlanning) {
-      addPlanning({
-        siteId: selectedSite.id,
-        workerId: modalSelectedWorker,
-        date: modalSelectedDate,
-        status: 'Planificado'
-      });
-      setModalSelectedWorker(null);
-      setIsPlanningModalVisible(false);
-      Alert.alert('Éxito', 'Sitio planificado correctamente.');
+    // Buscar si ya existe una planificación activa (no finalizada) para este sitio
+    const activePlanningForSite = plannings.find(p => p.siteId === selectedSite.id && p.status !== 'Ejecutado');
+
+    if (activePlanningForSite) {
+      if (updatePlanning) {
+        const workerChanged = activePlanningForSite.workerId !== modalSelectedWorker;
+        const resetFields = workerChanged ? {
+          startTime: null,
+          endTime: null,
+          datosGenerales: null,
+          hallazgos: null,
+          evidenciaSalida: null,
+          apagado3G: null,
+          apagadoBAFI: null,
+          apagadoAntenaSector1: null,
+          apagadoAntenaSector2: null,
+          apagadoAntenaSector3: null,
+          configurarRETU: null,
+          cambioChapa: null,
+        } : {};
+
+        updatePlanning(activePlanningForSite.id, {
+          workerId: modalSelectedWorker,
+          date: modalSelectedDate,
+          status: 'Planificado',
+          ...resetFields
+        } as any);
+        setModalSelectedWorker(null);
+        setIsPlanningModalVisible(false);
+        Alert.alert('Éxito', 'Planificación actualizada correctamente.');
+      }
+    } else {
+      const existingPlanningSameDate = plannings.find(p => p.siteId === selectedSite.id && p.date === modalSelectedDate);
+      if (existingPlanningSameDate) {
+        if (existingPlanningSameDate.workerId !== modalSelectedWorker && updatePlanning) {
+          const resetFields = {
+            startTime: null,
+            endTime: null,
+            datosGenerales: null,
+            hallazgos: null,
+            evidenciaSalida: null,
+            apagado3G: null,
+            apagadoBAFI: null,
+            apagadoAntenaSector1: null,
+            apagadoAntenaSector2: null,
+            apagadoAntenaSector3: null,
+            configurarRETU: null,
+            cambioChapa: null,
+          };
+          updatePlanning(existingPlanningSameDate.id, {
+            workerId: modalSelectedWorker,
+            status: 'Planificado',
+            ...resetFields
+          } as any);
+          setModalSelectedWorker(null);
+          setIsPlanningModalVisible(false);
+          Alert.alert('Éxito', 'Planificación actualizada correctamente.');
+          return;
+        }
+        Alert.alert('Sitio ya planificado', 'Este sitio ya está planificado para este día con el mismo trabajador.');
+        return;
+      }
+
+      if (addPlanning) {
+        addPlanning({
+          siteId: selectedSite.id,
+          workerId: modalSelectedWorker,
+          date: modalSelectedDate,
+          status: 'Planificado'
+        });
+        setModalSelectedWorker(null);
+        setIsPlanningModalVisible(false);
+        Alert.alert('Éxito', 'Sitio planificado correctamente.');
+      }
     }
   };
 
@@ -367,7 +441,7 @@ export const SitiosScreen = ({ navigation }: any) => {
           return (
             <SiteMarker
               key={`${site.id}-${getDynamicStatus(site)}`}
-              coordinate={{ latitude: site.lat, longitude: site.lng }}
+              coordinate={{ latitude: parseFloat(site.lat as any) || 0, longitude: parseFloat(site.lng as any) || 0 }}
               code={site.code}
               status={getDynamicStatus(site)}
               onPress={() => focusOnSite(site)}
@@ -397,7 +471,7 @@ export const SitiosScreen = ({ navigation }: any) => {
           </TouchableOpacity>
         </View>
 
-        <Animated.View style={{ flex: 1, opacity: contentOpacity, marginBottom: Platform.OS === 'android' ? 85 : 70 }}>
+        <Animated.View style={{ flex: 1, opacity: contentOpacity, marginBottom: 70 }}>
           {selectedSiteId && selectedSite ? (
             <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 20 }} showsVerticalScrollIndicator={true}>
               <View style={styles.detailHeader}>
@@ -427,7 +501,9 @@ export const SitiosScreen = ({ navigation }: any) => {
                           style={styles.actionCard}
                           onPress={() => {
                             if (executedPlanning) {
-                              navigation.navigate('DetalleActividad', { planningId: executedPlanning.id });
+                              startDownload(executedPlanning.id, () => {
+                                navigation.navigate('DetalleActividad', { planningId: executedPlanning.id });
+                              });
                             } else {
                               Alert.alert('Error', 'No se encontró la planificación para este sitio.');
                             }
@@ -439,19 +515,26 @@ export const SitiosScreen = ({ navigation }: any) => {
                           <Text style={styles.actionText}>Ver Informe</Text>
                         </TouchableOpacity>
                       );
-                    })() : (selectedSiteStatus === 'Pospuesto' || selectedSiteStatus === 'Sin Asignar') ? (
+                    })() : (selectedSiteStatus === 'Pospuesto' || selectedSiteStatus === 'Sin asignar' || selectedSiteStatus === 'Planificado') ? (
                       <TouchableOpacity 
                         style={styles.actionCard}
                         onPress={() => {
-                          setModalSelectedDate(todayString);
-                          setModalSelectedWorker(null);
+                          if (selectedSiteStatus === 'Planificado' && activePlanning) {
+                            setModalSelectedDate(activePlanning.date);
+                            setModalSelectedWorker(activePlanning.workerId);
+                          } else {
+                            setModalSelectedDate(todayString);
+                            setModalSelectedWorker(null);
+                          }
                           setIsPlanningModalVisible(true);
                         }}
                       >
                         <View style={[styles.actionIcon, { backgroundColor: '#FF9500' }]}>
                           <Ionicons name="calendar" size={20} color="#fff" />
                         </View>
-                        <Text style={styles.actionText}>Planificar</Text>
+                        <Text style={styles.actionText}>
+                          {selectedSiteStatus === 'Planificado' ? 'Replanificar' : 'Planificar'}
+                        </Text>
                       </TouchableOpacity>
                     ) : (
                       <View style={{ width: (screenWidth - 80) / 3 }} />
@@ -465,8 +548,29 @@ export const SitiosScreen = ({ navigation }: any) => {
                       <Text style={styles.actionText}>En el Mapa</Text>
                     </TouchableOpacity>
 
-                    {/* Right Column: Empty spacer */}
-                    <View style={{ width: (screenWidth - 80) / 3 }} />
+                    {/* Right Column: Replanificar if En ejecución and user is Fernando Aldao, otherwise Empty spacer */}
+                    {(selectedSiteStatus === 'En ejecución' && (currentUser?.name === 'Fernando Aldao' || currentUser?.email === 'fernando.aldao@f1.services')) ? (
+                      <TouchableOpacity 
+                        style={styles.actionCard}
+                        onPress={() => {
+                          if (activePlanning) {
+                            setModalSelectedDate(activePlanning.date);
+                            setModalSelectedWorker(activePlanning.workerId);
+                          } else {
+                            setModalSelectedDate(todayString);
+                            setModalSelectedWorker(null);
+                          }
+                          setIsPlanningModalVisible(true);
+                        }}
+                      >
+                        <View style={[styles.actionIcon, { backgroundColor: '#FF9500' }]}>
+                          <Ionicons name="calendar" size={20} color="#fff" />
+                        </View>
+                        <Text style={styles.actionText}>Replanificar</Text>
+                      </TouchableOpacity>
+                    ) : (
+                      <View style={{ width: (screenWidth - 80) / 3 }} />
+                    )}
                   </>
                 ) : (
                   <>
@@ -630,6 +734,7 @@ export const SitiosScreen = ({ navigation }: any) => {
                 <Text style={styles.modalSectionLabel}>1. Seleccionar Fecha de Planificación</Text>
                 <Calendar
                   current={modalSelectedDate}
+                  minDate={todayString}
                   onDayPress={(day: any) => setModalSelectedDate(day.dateString)}
                   markedDates={{
                     [modalSelectedDate]: {
@@ -663,6 +768,7 @@ export const SitiosScreen = ({ navigation }: any) => {
                     options={modalWorkerOptions}
                     onSelect={setModalSelectedWorker}
                     placeholder="Elegir trabajador..."
+                    searchable={true}
                   />
                 </View>
 
@@ -691,6 +797,12 @@ export const SitiosScreen = ({ navigation }: any) => {
           </View>
         </Modal>
       )}
+      {/* Modal de Progreso de Descarga */}
+      <DownloadProgressModal
+        visible={dlVisible}
+        progress={dlProgress}
+        statusMessage={dlStatus}
+      />
     </View>
   );
 };
@@ -737,7 +849,7 @@ const styles = StyleSheet.create({
   },
   bottomSheet: {
     position: 'absolute',
-    bottom: 15,
+    bottom: Platform.OS === 'android' ? 50 : 15,
     left: 15,
     right: 15,
     backgroundColor: 'rgba(28, 28, 30, 0.95)',

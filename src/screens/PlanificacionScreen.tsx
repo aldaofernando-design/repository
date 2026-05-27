@@ -7,6 +7,8 @@ import { colors } from '../theme/colors';
 import { AppContext } from '../context/AppContext';
 import { SelectDropdown } from '../components/SelectDropdown';
 import { ConfirmationModal } from '../components/ConfirmationModal';
+import { getSantiagoTodayString } from '../services/timeUtils';
+
 
 export const PlanificacionScreen = ({ navigation }: any) => {
   const context = useContext(AppContext);
@@ -19,7 +21,6 @@ export const PlanificacionScreen = ({ navigation }: any) => {
 
   // Modal States
   const [workerModal, setWorkerModal] = useState<{ visible: boolean, siteId: string, workerId: string }>({ visible: false, siteId: '', workerId: '' });
-  const [dateModal, setDateModal] = useState<{ visible: boolean, planning: any }>({ visible: false, planning: null });
   const [successModal, setSuccessModal] = useState({ visible: false, message: '' });
 
   // Dynamically extract project options
@@ -45,8 +46,8 @@ export const PlanificacionScreen = ({ navigation }: any) => {
   }, {} as Record<string, string>) || {};
 
   const availableSites = (context?.sites || []).filter(site => {
-    const status = siteStatusMap[site.id] || site.estadoExcel || 'Sin Asignar';
-    const matchesStatus = ['Planificado', 'Sin iniciar', 'Sin Asignar', 'Sin asignar', 'En ejecución', 'Pospuesto'].includes(status);
+    const status = siteStatusMap[site.id] || site.estadoExcel || 'Sin asignar';
+    const matchesStatus = ['Planificado', 'Sin iniciar', 'Sin asignar', 'Pospuesto'].includes(status);
     if (!matchesStatus) return false;
     if (selectedProject && selectedProject !== 'Todos' && site.proyecto !== selectedProject) return false;
     return true;
@@ -107,15 +108,11 @@ export const PlanificacionScreen = ({ navigation }: any) => {
     const planDate = new Date(year, month - 1, day);
 
     if (planDate < today) {
-      setDateModal({ visible: true, planning });
+      setDate(new Date());
+      Alert.alert('Fecha desactualizada', 'La fecha de la planificación anterior era anterior a hoy. Se ha actualizado automáticamente a la fecha de hoy.');
     } else {
       setDate(planDate);
     }
-  };
-
-  const confirmDateUpdate = () => {
-    setDateModal({ ...dateModal, visible: false });
-    setShowDatePicker(true);
   };
 
   const handlePlanificar = () => {
@@ -126,22 +123,43 @@ export const PlanificacionScreen = ({ navigation }: any) => {
 
     const dateString = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
     
-    const today = new Date();
-    const todayString = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    const todayString = getSantiagoTodayString();
     const plannedForToday = context?.plannings.find(p => p.siteId === selectedSite && p.date === todayString);
     if (plannedForToday && dateString !== todayString) {
       Alert.alert('Restricción', 'Este sitio ya está planificado para el día de hoy y no se puede planificar para un día diferente.');
       return;
     }
 
+    if (dateString < todayString) {
+      Alert.alert('Restricción', 'No puedes planificar o replanificar para una fecha anterior a la de hoy.');
+      return;
+    }
+
     const existingPlanning = context?.plannings.find(p => p.siteId === selectedSite);
 
     if (existingPlanning) {
+      const workerChanged = existingPlanning.workerId !== selectedWorker;
+      const resetFields = workerChanged ? {
+        startTime: null,
+        endTime: null,
+        datosGenerales: null,
+        hallazgos: null,
+        evidenciaSalida: null,
+        apagado3G: null,
+        apagadoBAFI: null,
+        apagadoAntenaSector1: null,
+        apagadoAntenaSector2: null,
+        apagadoAntenaSector3: null,
+        configurarRETU: null,
+        cambioChapa: null,
+      } : {};
+
       context?.updatePlanning(existingPlanning.id, {
         workerId: selectedWorker,
         date: dateString,
-        status: 'Planificado'
-      });
+        status: 'Planificado',
+        ...resetFields
+      } as any);
       setSuccessModal({ visible: true, message: 'Planificación actualizada correctamente' });
     } else {
       context?.addPlanning({
@@ -188,6 +206,7 @@ export const PlanificacionScreen = ({ navigation }: any) => {
           options={workerOptions}
           onSelect={setSelectedWorker}
           placeholder="Toca para elegir un trabajador..."
+          searchable={true}
         />
 
         <View style={styles.section}>
@@ -196,6 +215,7 @@ export const PlanificacionScreen = ({ navigation }: any) => {
             <View style={styles.iosDateContainer}>
               <DateTimePicker
                 value={date}
+                minimumDate={new Date()}
                 mode="date"
                 display="default"
                 onChange={onChangeDate}
@@ -210,6 +230,7 @@ export const PlanificacionScreen = ({ navigation }: any) => {
               {showDatePicker && (
                 <DateTimePicker
                   value={date}
+                  minimumDate={new Date()}
                   mode="date"
                   display="default"
                   onChange={onChangeDate}
@@ -218,11 +239,11 @@ export const PlanificacionScreen = ({ navigation }: any) => {
             </>
           )}
         </View>
-
+ 
         <TouchableOpacity style={styles.submitBtn} onPress={handlePlanificar}>
           <Text style={styles.submitBtnText}>Planificar Actividad</Text>
         </TouchableOpacity>
-
+ 
         {/* Modales Interactivos */}
         <ConfirmationModal 
           visible={workerModal.visible}
@@ -232,19 +253,6 @@ export const PlanificacionScreen = ({ navigation }: any) => {
           confirmLabel="Sí, cambiar"
           onConfirm={confirmWorkerChange}
           onCancel={() => setWorkerModal({ ...workerModal, visible: false })}
-        />
-
-        <ConfirmationModal 
-          visible={dateModal.visible}
-          title="Fecha Desactualizada"
-          message="La fecha de planificación es anterior al día de hoy. ¿Deseas actualizarla?"
-          icon="time-outline"
-          confirmLabel="Sí, actualizar"
-          onConfirm={confirmDateUpdate}
-          onCancel={() => {
-            setDate(new Date(dateModal.planning.date));
-            setDateModal({ ...dateModal, visible: false });
-          }}
         />
 
         <ConfirmationModal 

@@ -6,6 +6,7 @@
  */
 
 import { API_BASE_URL, API_TIMEOUT } from '../config/api';
+import { Platform } from 'react-native';
 
 // ── Helper: fetch con timeout ────────────────────────────────
 async function fetchWithTimeout(url: string, options: RequestInit = {}): Promise<Response> {
@@ -93,7 +94,7 @@ export async function getUsers(): Promise<ApiUser[]> {
   return json.data as ApiUser[];
 }
 
-export async function createUser(user: Omit<ApiUser, 'id'>): Promise<ApiUser> {
+export async function createUser(user: ApiUser): Promise<ApiUser> {
   const res = await fetchWithTimeout(`${API_BASE_URL}/users`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -159,18 +160,13 @@ export async function createPlanningApi(data: {
   return parseResponse<ApiPlanning>(res);
 }
 
-export async function updatePlanningApi(id: string, data: {
-  status?: string;
-  start_time?: string | null;
-  end_time?: string | null;
-  observations?: string;
-}): Promise<ApiPlanning> {
+export async function updatePlanningApi(id: string, data: any): Promise<any> {
   const res = await fetchWithTimeout(`${API_BASE_URL}/plannings/${id}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
-  return parseResponse<ApiPlanning>(res);
+  return parseResponse<any>(res);
 }
 
 // ── REPORTS ──────────────────────────────────────────────────
@@ -194,4 +190,121 @@ export async function checkApiHealth(): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+// ── Subida de Fotos Físicas a la Mac ─────────────────────────
+export async function uploadPhotoApi(uri: string): Promise<string> {
+  const formData = new FormData();
+  let cleanUri = uri;
+  try {
+    // 1. Decodificar completamente hasta tener @ y /
+    let decoded = decodeURIComponent(uri);
+    if (decoded.includes('%')) {
+      decoded = decodeURIComponent(decoded);
+    }
+
+    // 2. Si contiene el prefijo de caché de Expo, asegurar formato double-percent encoded (%2540 y %252F)
+    // para que la decodificación implícita nativa de React Native la resuelva a la ruta física literal con %40 y %2F
+    const expIndex = decoded.indexOf('ExperienceData/');
+    if (expIndex !== -1) {
+      const prefix = decoded.substring(0, expIndex + 'ExperienceData/'.length);
+      const rest = decoded.substring(expIndex + 'ExperienceData/'.length);
+      const doubleEncodedRest = rest.replace(/@([^/]+)\/([^/]+)/g, '%2540$1%252F$2');
+      cleanUri = prefix + doubleEncodedRest;
+    } else {
+      cleanUri = decoded;
+    }
+  } catch (e) {
+    console.log('Error decodificando URI:', e);
+  }
+
+  const filename = cleanUri.split('/').pop() || 'photo.jpg';
+  const match = /\.(\w+)$/.exec(filename);
+  const type = match ? `image/${match[1]}` : 'image/jpeg';
+  
+  // @ts-ignore
+  formData.append('photo', {
+    uri: cleanUri,
+    name: filename,
+    type,
+  });
+
+  const res = await fetch(`${API_BASE_URL}/photos/upload`, {
+    method: 'POST',
+    body: formData,
+    headers: {
+      'Accept': 'application/json',
+    },
+  });
+
+  if (!res.ok) {
+    throw new Error(`Error en subida: ${res.status}`);
+  }
+
+  const json = await res.json();
+  if (!json.success) {
+    throw new Error(json.error || 'Fallo en la subida');
+  }
+
+  return json.url;
+}
+
+// ── Actualizar Ubicación GPS de un Trabajador ────────────────
+export async function updateUserLocationApi(id: string, latitude: number, longitude: number): Promise<any> {
+  const res = await fetchWithTimeout(`${API_BASE_URL}/users/${id}/location`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ latitude, longitude }),
+  });
+  
+  if (!res.ok) {
+    throw new Error(`Error en actualización de ubicación: ${res.status}`);
+  }
+  
+  return parseResponse<any>(res);
+}
+
+// ── Obtener Notificaciones de un Trabajador ──────────────────
+export async function getNotificationsApi(workerId: string): Promise<any> {
+  const res = await fetchWithTimeout(`${API_BASE_URL}/notifications/worker/${workerId}`);
+  if (!res.ok) {
+    throw new Error(`Error al obtener notificaciones: ${res.status}`);
+  }
+  return parseResponse<any>(res);
+}
+
+// ── Marcar Notificación como Leída ──────────────────────────
+export async function markNotificationAsReadApi(id: number): Promise<any> {
+  const res = await fetchWithTimeout(`${API_BASE_URL}/notifications/${id}/read`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+  });
+  if (!res.ok) {
+    throw new Error(`Error al marcar notificación como leída: ${res.status}`);
+  }
+  return parseResponse<any>(res);
+}
+
+// ── Marcar Todas las Notificaciones como Leídas ──────────────
+export async function markAllNotificationsAsReadApi(workerId: string): Promise<any> {
+  const res = await fetchWithTimeout(`${API_BASE_URL}/notifications/worker/${workerId}/read-all`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+  });
+  if (!res.ok) {
+    throw new Error(`Error al marcar todas las notificaciones como leídas: ${res.status}`);
+  }
+  return parseResponse<any>(res);
+}
+
+// ── Eliminar una Notificación ────────────────────────────────
+export async function deleteNotificationApi(id: number): Promise<any> {
+  const res = await fetchWithTimeout(`${API_BASE_URL}/notifications/${id}`, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+  });
+  if (!res.ok) {
+    throw new Error(`Error al eliminar notificación: ${res.status}`);
+  }
+  return parseResponse<any>(res);
 }

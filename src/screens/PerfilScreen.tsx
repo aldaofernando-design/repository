@@ -135,8 +135,7 @@ export const PerfilScreen = ({ navigation }: any) => {
           <Text style={styles.logoutButtonText}>Cerrar Sesión</Text>
         </TouchableOpacity>
 
-        {/* App Version Tag */}
-        <Text style={styles.versionText}>Versión de Aplicación 1.2.0 • Proyectos F1+</Text>
+
       </View>
     </SafeAreaView>
   );
@@ -285,11 +284,5 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontWeight: 'bold',
   },
-  versionText: {
-    textAlign: 'center',
-    color: 'rgba(255,255,255,0.25)',
-    fontSize: 12,
-    marginTop: 30,
-    fontWeight: '500',
-  },
+
 });

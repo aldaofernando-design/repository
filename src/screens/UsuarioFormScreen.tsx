@@ -80,7 +80,9 @@ export const UsuarioFormScreen = ({ route, navigation }: any) => {
 
   const availableRoles = currentUserRole === 'Administrador' 
     ? ['Administrador', 'Coordinador', 'Trabajador'] 
-    : ['Trabajador'];
+    : (context?.currentUser?.name === 'Fernando Aldao' || context?.currentUser?.email === 'fernando.aldao@f1.services')
+      ? ['Coordinador', 'Trabajador']
+      : ['Trabajador'];
 
   return (
     <SafeAreaView style={styles.container}>

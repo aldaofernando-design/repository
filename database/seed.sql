@@ -19,27 +19,27 @@ INSERT INTO users (id, name, email, phone, company, role, status) VALUES
 -- carga la lista completa desde sitesData.ts)
 -- ------------------------------------------------------------
 INSERT INTO sites (id, code, name, commune, address, latitude, longitude, region, estado_excel, proyecto, apagado_bafi) VALUES
-  ('AM790', 'AM790', 'Paradero 29 Reubicación',             'La Cisterna', 'Trinidad Ramirez N°0250',          -33.543192, -70.671128, 13, 'Sin Asignar', 'Apagado BAFI', TRUE),
-  ('AM849', 'AM849', 'Primavera - reubicación (Ex RM970)',  'La Pintana',  'Dr. Amador Neghme N° 02749',        -33.601672, -70.623272, 13, 'Sin Asignar', 'Apagado BAFI', TRUE),
-  ('SA812', 'SA812', 'Sitio SA812',                         'Santiago',    'Dirección SA812',                   -33.450000, -70.680000, 13, 'Sin Asignar', 'Apagado 3G',   FALSE),
-  ('SA241', 'SA241', 'Sitio SA241',                         'Santiago',    'Dirección SA241',                   -33.460000, -70.670000, 13, 'Sin Asignar', 'Apagado 3G',   FALSE),
-  ('RM518', 'RM518', 'Sitio RM518',                         'Maipú',       'Dirección RM518',                   -33.510000, -70.750000, 13, 'Sin Asignar', 'Apagado 3G',   FALSE),
-  ('FN698', 'FN698', 'Sitio FN698',                         'Ñuñoa',       'Dirección FN698',                   -33.455000, -70.590000, 13, 'Sin Asignar', 'Apagado BAFI', TRUE),
-  ('AS070', 'AS070', 'Av. España - Batuco',                  'Batuco',      'Av. España s/n',                    -33.130000, -70.810000, 13, 'Sin Asignar', 'Apagado 3G',   FALSE),
-  ('SA920', 'SA920', 'Sitio SA920',                         'Pudahuel',    'Dirección SA920',                   -33.430000, -70.770000, 13, 'Sin Asignar', 'Apagado BAFI', TRUE),
-  ('SA121', 'SA121', 'Sitio SA121',                         'Renca',       'Dirección SA121',                   -33.408000, -70.730000, 13, 'Sin Asignar', 'Apagado 3G',   FALSE),
-  ('AS228', 'AS228', 'Sitio AS228',                         'Quilicura',   'Dirección AS228',                   -33.370000, -70.740000, 13, 'Sin Asignar', 'Apagado BAFI', TRUE),
-  ('FN707', 'FN707', 'Sitio FN707',                         'Las Condes',  'Dirección FN707',                   -33.408000, -70.577000, 13, 'Sin Asignar', 'Apagado BAFI', TRUE),
-  ('SA792', 'SA792', 'Sitio SA792',                         'Peñalolén',   'Dirección SA792',                   -33.492000, -70.575000, 13, 'Sin Asignar', 'Apagado 3G',   FALSE),
-  ('RS153', 'RS153', 'Sitio RS153',                         'La Florida',  'Dirección RS153',                   -33.522000, -70.597000, 13, 'Sin Asignar', 'Apagado 3G',   FALSE),
-  ('SA331', 'SA331', 'Sitio SA331',                         'La Granja',   'Dirección SA331',                   -33.536000, -70.624000, 13, 'Sin Asignar', 'Apagado 3G',   FALSE),
-  ('SA935', 'SA935', 'Sitio SA935',                         'Pudahuel',    'Dirección SA935',                   -33.443000, -70.763000, 13, 'Sin Asignar', 'Apagado 3G',   FALSE),
-  ('SA288', 'SA288', 'Sitio SA288',                         'Cerro Navia', 'Dirección SA288',                   -33.417000, -70.750000, 13, 'Sin Asignar', 'Apagado 3G',   FALSE),
-  ('FG084', 'FG084', 'Sitio FG084',                         'Estación Cen','Dirección FG084',                   -33.453000, -70.668000, 13, 'Sin Asignar', 'Apagado BAFI', TRUE),
-  ('RM594', 'RM594', 'Sitio RM594',                         'Maipú',       'Dirección RM594',                   -33.510000, -70.769000, 13, 'Sin Asignar', 'Apagado 3G',   FALSE),
-  ('FG085', 'FG085', 'Sitio FG085',                         'Quinta Normal','Dirección FG085',                  -33.433000, -70.704000, 13, 'Sin Asignar', 'Apagado BAFI', TRUE),
-  ('RS395', 'RS395', 'Sitio RS395',                         'Macul',       'Dirección RS395',                   -33.488000, -70.600000, 13, 'Sin Asignar', 'Apagado 3G',   FALSE),
-  ('RS876', 'RS876', 'Sitio RS876',                         'San Miguel',  'Dirección RS876',                   -33.497000, -70.648000, 13, 'Sin Asignar', 'Apagado 3G',   FALSE);
+  ('AM790', 'AM790', 'Paradero 29 Reubicación',             'La Cisterna', 'Trinidad Ramirez N°0250',          -33.543192, -70.671128, 13, 'Sin asignar', 'Apagado BAFI', TRUE),
+  ('AM849', 'AM849', 'Primavera - reubicación (Ex RM970)',  'La Pintana',  'Dr. Amador Neghme N° 02749',        -33.601672, -70.623272, 13, 'Sin asignar', 'Apagado BAFI', TRUE),
+  ('SA812', 'SA812', 'Sitio SA812',                         'Santiago',    'Dirección SA812',                   -33.450000, -70.680000, 13, 'Sin asignar', 'Apagado 3G',   FALSE),
+  ('SA241', 'SA241', 'Sitio SA241',                         'Santiago',    'Dirección SA241',                   -33.460000, -70.670000, 13, 'Sin asignar', 'Apagado 3G',   FALSE),
+  ('RM518', 'RM518', 'Sitio RM518',                         'Maipú',       'Dirección RM518',                   -33.510000, -70.750000, 13, 'Sin asignar', 'Apagado 3G',   FALSE),
+  ('FN698', 'FN698', 'Sitio FN698',                         'Ñuñoa',       'Dirección FN698',                   -33.455000, -70.590000, 13, 'Sin asignar', 'Apagado BAFI', TRUE),
+  ('AS070', 'AS070', 'Av. España - Batuco',                  'Batuco',      'Av. España s/n',                    -33.130000, -70.810000, 13, 'Sin asignar', 'Apagado 3G',   FALSE),
+  ('SA920', 'SA920', 'Sitio SA920',                         'Pudahuel',    'Dirección SA920',                   -33.430000, -70.770000, 13, 'Sin asignar', 'Apagado BAFI', TRUE),
+  ('SA121', 'SA121', 'Sitio SA121',                         'Renca',       'Dirección SA121',                   -33.408000, -70.730000, 13, 'Sin asignar', 'Apagado 3G',   FALSE),
+  ('AS228', 'AS228', 'Sitio AS228',                         'Quilicura',   'Dirección AS228',                   -33.370000, -70.740000, 13, 'Sin asignar', 'Apagado BAFI', TRUE),
+  ('FN707', 'FN707', 'Sitio FN707',                         'Las Condes',  'Dirección FN707',                   -33.408000, -70.577000, 13, 'Sin asignar', 'Apagado BAFI', TRUE),
+  ('SA792', 'SA792', 'Sitio SA792',                         'Peñalolén',   'Dirección SA792',                   -33.492000, -70.575000, 13, 'Sin asignar', 'Apagado 3G',   FALSE),
+  ('RS153', 'RS153', 'Sitio RS153',                         'La Florida',  'Dirección RS153',                   -33.522000, -70.597000, 13, 'Sin asignar', 'Apagado 3G',   FALSE),
+  ('SA331', 'SA331', 'Sitio SA331',                         'La Granja',   'Dirección SA331',                   -33.536000, -70.624000, 13, 'Sin asignar', 'Apagado 3G',   FALSE),
+  ('SA935', 'SA935', 'Sitio SA935',                         'Pudahuel',    'Dirección SA935',                   -33.443000, -70.763000, 13, 'Sin asignar', 'Apagado 3G',   FALSE),
+  ('SA288', 'SA288', 'Sitio SA288',                         'Cerro Navia', 'Dirección SA288',                   -33.417000, -70.750000, 13, 'Sin asignar', 'Apagado 3G',   FALSE),
+  ('FG084', 'FG084', 'Sitio FG084',                         'Estación Cen','Dirección FG084',                   -33.453000, -70.668000, 13, 'Sin asignar', 'Apagado BAFI', TRUE),
+  ('RM594', 'RM594', 'Sitio RM594',                         'Maipú',       'Dirección RM594',                   -33.510000, -70.769000, 13, 'Sin asignar', 'Apagado 3G',   FALSE),
+  ('FG085', 'FG085', 'Sitio FG085',                         'Quinta Normal','Dirección FG085',                  -33.433000, -70.704000, 13, 'Sin asignar', 'Apagado BAFI', TRUE),
+  ('RS395', 'RS395', 'Sitio RS395',                         'Macul',       'Dirección RS395',                   -33.488000, -70.600000, 13, 'Sin asignar', 'Apagado 3G',   FALSE),
+  ('RS876', 'RS876', 'Sitio RS876',                         'San Miguel',  'Dirección RS876',                   -33.497000, -70.648000, 13, 'Sin asignar', 'Apagado 3G',   FALSE);
 
 -- ------------------------------------------------------------
 -- PLANIFICACIONES

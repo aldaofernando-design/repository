@@ -108,7 +108,7 @@ async function migrate() {
             s.commune || null, s.address || null,
             s.lat || null, s.lng || null,
             s.region || null,
-            s.estadoExcel || 'Sin Asignar',
+            s.estadoExcel || 'Sin asignar',
             s.proyecto || null,
             s.apagadoBAFI === 'SI',
           ]

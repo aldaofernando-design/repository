@@ -7,9 +7,11 @@ import * as Location from 'expo-location';
 import { Ionicons, FontAwesome5 } from '@expo/vector-icons';
 import { colors } from '../theme/colors';
 import { AppContext } from '../context/AppContext';
-import { getElapsedTime, formatTime } from '../services/timeUtils';
+import { getElapsedTime, formatTime, getSantiagoTodayString } from '../services/timeUtils';
 import { SiteMarker } from '../components/MapMarkerBitmap';
 import { calculatePlanningProgress, getReportProgressColor } from '../utils/progressHelper';
+import { DownloadProgressModal } from '../components/DownloadProgressModal';
+import { useReportDownloader } from '../utils/downloadHelper';
 
 
 const getInitials = (name: string) => {
@@ -32,12 +34,13 @@ interface PhotoMarkerProps {
   onPress?: () => void;
   title?: string;
   description?: string;
+  noBubble?: boolean;
 }
 
-const PhotoMarker = ({ coordinate, photoUri, name, zIndex = 100, size = 46, borderColor = '#fff', onPress, title, description }: PhotoMarkerProps) => {
+const PhotoMarker = ({ coordinate, photoUri, name, zIndex = 100, size = 46, borderColor = '#fff', onPress, title, description, noBubble }: PhotoMarkerProps) => {
   const [loaded, setLoaded] = React.useState(!photoUri);
   const r = size / 2;
-  const borderWidth = size > 20 ? 3 : 1.5;
+  const borderWidth = noBubble ? 1.5 : (size > 20 ? 3 : 1.5);
   const containerSize = size + borderWidth * 2;
   const triWidth = Math.max(3, Math.round(size * 0.15));
   const triHeight = Math.max(4, Math.round(size * 0.22));
@@ -47,7 +50,7 @@ const PhotoMarker = ({ coordinate, photoUri, name, zIndex = 100, size = 46, bord
       coordinate={coordinate}
       zIndex={zIndex}
       tracksViewChanges={!loaded}
-      anchor={{ x: 0.5, y: 1.0 }}
+      anchor={noBubble ? { x: 0.5, y: 0.5 } : { x: 0.5, y: 1.0 }}
       onPress={onPress}
       title={title}
       description={description}
@@ -60,10 +63,12 @@ const PhotoMarker = ({ coordinate, photoUri, name, zIndex = 100, size = 46, bord
             width: containerSize,
             height: containerSize,
             borderRadius: r + borderWidth,
-            backgroundColor: borderColor,
+            backgroundColor: noBubble ? 'transparent' : borderColor,
             alignItems: 'center',
             justifyContent: 'center',
             elevation: 6,
+            borderWidth: noBubble ? 1.5 : 0,
+            borderColor: '#fff',
           }}
         >
           {photoUri ? (
@@ -93,12 +98,14 @@ const PhotoMarker = ({ coordinate, photoUri, name, zIndex = 100, size = 46, bord
           )}
         </View>
         {/* Punta triangular */}
-        <View style={{
-          width: 0, height: 0,
-          borderLeftWidth: triWidth, borderRightWidth: triWidth, borderTopWidth: triHeight,
-          borderLeftColor: 'transparent', borderRightColor: 'transparent',
-          borderTopColor: borderColor,
-        }} />
+        {!noBubble && (
+          <View style={{
+            width: 0, height: 0,
+            borderLeftWidth: triWidth, borderRightWidth: triWidth, borderTopWidth: triHeight,
+            borderLeftColor: 'transparent', borderRightColor: 'transparent',
+            borderTopColor: borderColor,
+          }} />
+        )}
       </View>
     </Marker>
   );
@@ -112,10 +119,20 @@ const SHEET_MAX_HEIGHT = screenHeight - 150;
 export const ActividadScreen = ({ route, navigation }: any) => {
   const context = useContext(AppContext);
   const currentUser = context?.currentUser;
+  const todayString = getSantiagoTodayString();
   
   const allPlannings = context?.plannings || [];
   const allSites = context?.sites || [];
   const allUsers = context?.users || [];
+  const fetchAndSyncPlanning = context?.fetchAndSyncPlanning;
+  const isApiConnected = context?.isApiConnected || false;
+
+  const {
+    visible: dlVisible,
+    progress: dlProgress,
+    status: dlStatus,
+    startDownload
+  } = useReportDownloader(fetchAndSyncPlanning as any, isApiConnected);
 
   const [locationPermission, setLocationPermission] = useState(false);
   const [selectedSiteId, setSelectedSiteId] = useState<string | null>(null);
@@ -198,21 +215,13 @@ export const ActividadScreen = ({ route, navigation }: any) => {
     extrapolate: 'clamp',
   });
 
-  const [userLocation, setUserLocation] = useState<Location.LocationObject | null>(null);
-
   useEffect(() => {
-    let subscription: any;
     (async () => {
       let { status } = await Location.requestForegroundPermissionsAsync();
       if (status === 'granted') {
         setLocationPermission(true);
-        subscription = await Location.watchPositionAsync(
-          { accuracy: Location.Accuracy.High, distanceInterval: 10 },
-          (location) => setUserLocation(location)
-        );
       }
     })();
-    return () => subscription?.remove();
   }, []);
 
   useEffect(() => {
@@ -241,7 +250,36 @@ export const ActividadScreen = ({ route, navigation }: any) => {
     }
   }, [route?.params?.autoSelectSiteId]);
 
-  const [selectedProject, setSelectedProject] = useState<string | null>(null);
+  useEffect(() => {
+    const autoSelectWorkerId = route?.params?.autoSelectWorkerId;
+    if (autoSelectWorkerId) {
+      const worker = allUsers.find(u => u.id === autoSelectWorkerId);
+      if (worker) {
+        // Encontrar su planificación activa (Ejecutado, En ejecución, o Planificado hoy)
+        const workerPlan = allPlannings.find(p => p.workerId === worker.id && (p.status === 'Ejecutado' || p.status === 'En ejecución' || (p.status === 'Planificado' && p.date === todayString)));
+        const workerSite = allSites.find(s => s.id === workerPlan?.siteId);
+        
+        // Coordenadas reales del trabajador (GPS registradas en el perfil)
+        const hasLiveCoords = worker.latitude !== undefined && worker.latitude !== null && worker.longitude !== undefined && worker.longitude !== null;
+        
+        if (hasLiveCoords) {
+          const lat = parseFloat(worker.latitude as any);
+          const lng = parseFloat(worker.longitude as any);
+          console.log(`📍 Centrando mapa en la ubicación GPS real de ${worker.name}: ${lat}, ${lng}`);
+          setTimeout(() => focusOnWorker(lat, lng, workerSite), 500);
+        } else {
+          Alert.alert(
+            'GPS Inactivo',
+            `${worker.name} no tiene su GPS activo por lo cual no puede mostrarse en el mapa.`
+          );
+        }
+      }
+      navigation.setParams({ autoSelectWorkerId: undefined });
+    }
+  }, [route?.params?.autoSelectWorkerId]);
+
+  const [selectedProject, setSelectedProject] = useState<string | null>('Todos');
+  const [selectedStatus, setSelectedStatus] = useState<string | null>('Todos');
 
   const projectsList = Array.from(new Set(
     allSites
@@ -249,24 +287,42 @@ export const ActividadScreen = ({ route, navigation }: any) => {
       .filter((p): p is string => !!p)
   ));
   const projectOptions = [
-    { id: 'Todos', label: 'Todos los Proyectos' },
+    { id: 'Todos', label: 'Todos' },
     ...projectsList.map(p => ({ id: p, label: p }))
   ];
 
-  const today = new Date();
-  const todayString = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+  const statusOptions = [
+    { id: 'Todos', label: 'Todos' },
+    { id: 'Planificado', label: 'Planificado' },
+    { id: 'En ejecución', label: 'En ejecución' },
+    { id: 'Ejecutado', label: 'Ejecutado' },
+  ];
+
 
   const filteredPlannings = allPlannings.filter(planning => {
+    // Si el usuario es Trabajador, NO mostramos 'Ejecutado' bajo ninguna circunstancia
+    if (currentUser?.role === 'Trabajador' && planning.status === 'Ejecutado') {
+      return false;
+    }
+
+
     const isEnEjecucion = planning.status === 'En ejecución';
-    const isEjecutado = planning.status === 'Ejecutado';
     const isPlanificadoHoy = planning.status === 'Planificado' && planning.date === todayString;
-    if (!isEnEjecucion && !isPlanificadoHoy && !isEjecutado) return false;
+    const isEjecutadoHoy = planning.status === 'Ejecutado' && 
+      (planning.endTime ? planning.endTime.split('T')[0] === todayString : planning.date === todayString);
+
+    if (!isEnEjecucion && !isPlanificadoHoy && !isEjecutadoHoy) return false;
 
     // Filter by project
     const site = allSites.find(s => s.id === planning.siteId);
     if (!site) return false;
-    if (currentUser?.role !== 'Trabajador' && selectedProject && selectedProject !== 'Todos' && site.proyecto !== selectedProject) {
-      return false;
+    if (currentUser?.role !== 'Trabajador') {
+      if (selectedProject && selectedProject !== 'Todos' && site.proyecto !== selectedProject) {
+        return false;
+      }
+      if (selectedStatus && selectedStatus !== 'Todos' && planning.status !== selectedStatus) {
+        return false;
+      }
     }
 
     if (currentUser?.role === 'Trabajador') {
@@ -322,7 +378,7 @@ export const ActividadScreen = ({ route, navigation }: any) => {
     Linking.openURL(url);
   };
 
-  const focusOnWorker = (workerLat: number, workerLng: number, site: any) => {
+  const focusOnWorker = (workerLat: number, workerLng: number, site?: any) => {
     const dLat = (250 / screenHeight) * 0.005;
     if (mapRef.current) {
       mapRef.current.animateToRegion({
@@ -332,7 +388,9 @@ export const ActividadScreen = ({ route, navigation }: any) => {
         longitudeDelta: 0.005,
       }, 1000);
     }
-    setSelectedSiteId(site.id);
+    if (site?.id) {
+      setSelectedSiteId(site.id);
+    }
 
     Animated.spring(sheetHeight, {
       toValue: SHEET_MID_HEIGHT,
@@ -345,11 +403,15 @@ export const ActividadScreen = ({ route, navigation }: any) => {
 
   const focusOnUserLocation = async () => {
     try {
-      let coords = userLocation?.coords;
-      if (!coords) {
-        const location = await Location.getCurrentPositionAsync({});
-        coords = location.coords;
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permiso denegado', 'Se requiere permiso de ubicación para centrar el mapa.');
+        return;
       }
+      const location = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Balanced,
+      });
+      const coords = location?.coords;
       if (coords && mapRef.current) {
         const dLat = (250 / screenHeight) * 0.005;
         mapRef.current.animateToRegion({
@@ -422,7 +484,7 @@ export const ActividadScreen = ({ route, navigation }: any) => {
         return '#0A84FF';
       case 'Ejecutado':
         return '#30D158';
-      case 'Sin Asignar':
+      case 'Sin asignar':
       default:
         return 'rgba(255, 255, 255, 0.4)';
     }
@@ -438,12 +500,12 @@ export const ActividadScreen = ({ route, navigation }: any) => {
         return `Pospuesto • Tenía asignado a: ${name} • Desde el ${formatDateStr(planning?.date)}`;
       case 'Planificado':
         return `Planificado • Asignado a: ${name} • Para el ${formatDateStr(planning?.date)}`;
-      case 'Sin Asignar':
-        return 'Sin Asignar';
+      case 'Sin asignar':
+        return 'Sin asignar';
       case 'Ejecutado':
         return `Ejecutado • Realizado por: ${name}${planning?.endTime ? ` • El ${formatDateTimeStr(planning.endTime)}` : ''}`;
       default:
-        return status || 'Sin Asignar';
+        return status || 'Sin asignar';
     }
   };
 
@@ -483,16 +545,27 @@ export const ActividadScreen = ({ route, navigation }: any) => {
              item.status === 'En ejecución' ? `En ejecución • ${getElapsedTime(item.startTime)}` : item.status}
           </Text>
           ) : (
-            <View style={styles.workerBadgeMini}>
-              {worker?.photo ? (
-                <Image source={{ uri: worker.photo }} style={styles.workerPhotoMini} />
-              ) : (
-                <Ionicons name="person" size={10} color={colors.textSecondary} />
-              )}
-              <Text style={styles.workerBadgeText}>
-                {worker?.name || 'Sin asignar'}{site.proyecto ? ` • ${site.proyecto}` : ''}
+            <>
+              <View style={styles.workerBadgeMini}>
+                {worker?.photo ? (
+                  <Image source={{ uri: worker.photo }} style={styles.workerPhotoMini} />
+                ) : (
+                  <Ionicons name="person" size={10} color={colors.textSecondary} style={{ marginRight: 4 }} />
+                )}
+                <Text style={styles.workerBadgeText}>
+                  {worker?.name || 'Sin asignar'}{site.proyecto ? ` • ${site.proyecto}` : ''}
+                </Text>
+              </View>
+              <Text style={[styles.statusText, { 
+                color: item.status === 'Ejecutado' ? colors.success : 
+                       item.status === 'En ejecución' ? '#FF9500' : '#0A84FF',
+                fontSize: 12,
+                marginTop: 2
+              }]}>
+                {item.status === 'Ejecutado' ? `Ejecutado • ${formatTime(item.endTime)}` : 
+                 item.status === 'En ejecución' ? `En ejecución • ${getElapsedTime(item.startTime)}` : item.status}
               </Text>
-            </View>
+            </>
           )}
         </View>
         <Ionicons name="chevron-forward" size={20} color={colors.border} />
@@ -522,7 +595,7 @@ export const ActividadScreen = ({ route, navigation }: any) => {
           return (
             <SiteMarker
               key={`${plan.id}-${plan.status}`}
-              coordinate={{ latitude: site.lat, longitude: site.lng }}
+              coordinate={{ latitude: parseFloat(site.lat as any) || 0, longitude: parseFloat(site.lng as any) || 0 }}
               code={site.code}
               status={plan.status}
               onPress={() => focusOnSite(site)}
@@ -532,18 +605,18 @@ export const ActividadScreen = ({ route, navigation }: any) => {
         })}
         {/* Ubicación del Trabajador: usa el punto nativo de showsUserLocation */}
 
-        {/* Marcadores de Trabajadores (Solo para Admin/Coordinador) */}
+        {/* Marcadores de Trabajadores (Solo para Admin/Coordinador con GPS activo hoy) */}
         {(currentUser?.role === 'Administrador' || currentUser?.role === 'Coordinador') && (
           allUsers
             .filter(u => u.role === 'Trabajador')
+            .filter(u => u.latitude !== undefined && u.latitude !== null && u.longitude !== undefined && u.longitude !== null)
             .filter(u => filteredPlannings.some(p => p.workerId === u.id))
             .map(worker => {
               const workerPlan = filteredPlannings.find(p => p.workerId === worker.id);
               const workerSite = allSites.find(s => s.id === workerPlan?.siteId);
-              if (!workerSite) return null;
-
-              const workerLat = workerSite.lat + 0.002;
-              const workerLng = workerSite.lng + 0.002;
+              
+              const workerLat = worker.latitude!;
+              const workerLng = worker.longitude!;
 
               return (
                 <PhotoMarker
@@ -552,11 +625,11 @@ export const ActividadScreen = ({ route, navigation }: any) => {
                   photoUri={worker.photo}
                   name={worker.name}
                   zIndex={101}
-                  size={24}
-                  borderColor="#30D158"
+                  size={36}
                   title={worker.name}
-                  description={`Técnico en terreno - ${worker.company}`}
+                  description="Ubicación GPS (Activa hace < 15m)"
                   onPress={() => focusOnWorker(workerLat, workerLng, workerSite)}
+                  noBubble={true}
                 />
               );
             })
@@ -583,7 +656,7 @@ export const ActividadScreen = ({ route, navigation }: any) => {
             </TouchableOpacity>
           </View>
 
-          <Animated.View style={{ flex: 1, opacity: contentOpacity, marginBottom: Platform.OS === 'android' ? 85 : 70 }}>
+          <Animated.View style={{ flex: 1, opacity: contentOpacity, marginBottom: 70 }}>
             {selectedSiteId && selectedSite ? (
               <ScrollView 
                 style={styles.detailContainer} 
@@ -608,7 +681,15 @@ export const ActividadScreen = ({ route, navigation }: any) => {
               {currentUser?.role === 'Trabajador' ? (
                 <TouchableOpacity 
                   style={styles.actionCard}
-                  onPress={() => navigation.navigate('DetalleActividad', { planningId: selectedPlanning?.id })}
+                  onPress={() => {
+                    if (selectedPlanning?.status === 'Ejecutado') {
+                      startDownload(selectedPlanning.id, () => {
+                        navigation.navigate('DetalleActividad', { planningId: selectedPlanning.id });
+                      });
+                    } else {
+                      navigation.navigate('DetalleActividad', { planningId: selectedPlanning?.id });
+                    }
+                  }}
                 >
                   <View style={[
                     styles.actionIcon, 
@@ -631,7 +712,13 @@ export const ActividadScreen = ({ route, navigation }: any) => {
                 return (
                   <TouchableOpacity 
                     style={styles.actionCard}
-                    onPress={() => navigation.navigate('DetalleActividad', { planningId: selectedPlanning?.id })}
+                    onPress={() => {
+                      if (selectedPlanning) {
+                        startDownload(selectedPlanning.id, () => {
+                          navigation.navigate('DetalleActividad', { planningId: selectedPlanning.id });
+                        });
+                      }
+                    }}
                   >
                     <View style={[styles.actionIcon, { backgroundColor: iconBgColor }]}>
                       <Ionicons name="search" size={20} color="#fff" />
@@ -719,14 +806,25 @@ export const ActividadScreen = ({ route, navigation }: any) => {
           <View style={styles.listContainer}>
             {/* Título eliminado */}
             {currentUser?.role !== 'Trabajador' && (
-              <View style={{ marginBottom: 12 }}>
-                <SelectDropdown 
-                  label="Filtrar por Proyecto"
-                  value={selectedProject}
-                  options={projectOptions}
-                  onSelect={setSelectedProject}
-                  placeholder="Todos los Proyectos"
-                />
+              <View style={styles.filtersRow}>
+                <View style={styles.filterWrapper}>
+                  <SelectDropdown 
+                    label="Proyecto"
+                    value={selectedProject}
+                    options={projectOptions}
+                    onSelect={setSelectedProject}
+                    placeholder="Todos"
+                  />
+                </View>
+                <View style={styles.filterWrapper}>
+                  <SelectDropdown 
+                    label="Estado"
+                    value={selectedStatus}
+                    options={statusOptions}
+                    onSelect={setSelectedStatus}
+                    placeholder="Todos"
+                  />
+                </View>
               </View>
             )}
             <FlatList
@@ -735,13 +833,19 @@ export const ActividadScreen = ({ route, navigation }: any) => {
               renderItem={renderPlanningItem}
               contentContainerStyle={{ paddingBottom: 20 }}
               ListEmptyComponent={
-                <Text style={styles.emptyListText}>No hay actividades para hoy.</Text>
+                <Text style={styles.emptyListText}>No hay actividades para mostrar.</Text>
               }
             />
           </View>
         )}
           </Animated.View>
         </Animated.View>
+      {/* Modal de Progreso de Descarga */}
+      <DownloadProgressModal
+        visible={dlVisible}
+        progress={dlProgress}
+        statusMessage={dlStatus}
+      />
     </View>
   );
 };
@@ -813,7 +917,7 @@ const styles = StyleSheet.create({
   },
   bottomSheet: {
     position: 'absolute',
-    bottom: 15,
+    bottom: Platform.OS === 'android' ? 50 : 15,
     left: 15,
     right: 15,
     backgroundColor: 'rgba(28, 28, 30, 0.95)',
@@ -1166,5 +1270,13 @@ const styles = StyleSheet.create({
     fontStyle: 'italic',
     textAlign: 'center',
     marginTop: 40,
+  },
+  filtersRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 12,
+  },
+  filterWrapper: {
+    flex: 1,
   },
 });

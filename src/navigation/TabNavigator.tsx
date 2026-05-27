@@ -34,7 +34,7 @@ export const TabNavigator = () => {
           paddingTop: 5,
           height: 70,
           position: 'absolute',
-          bottom: Platform.OS === 'android' ? 30 : 15,
+          bottom: Platform.OS === 'android' ? 50 : 15,
           left: 15,
           right: 15,
         },

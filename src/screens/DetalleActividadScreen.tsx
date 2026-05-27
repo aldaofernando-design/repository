@@ -7,13 +7,15 @@ import * as Location from 'expo-location';
 import ViewShot, { captureRef } from 'react-native-view-shot';
 import { colors } from '../theme/colors';
 import { AppContext } from '../context/AppContext';
+import { getElapsedTime, getSantiagoTodayString } from '../services/timeUtils';
+import { uploadPhotoApi, getPlanningDetail } from '../services/apiService';
+import { UploadProgressModal } from '../components/UploadProgressModal';
 import { SelectDropdown } from '../components/SelectDropdown';
-import { getElapsedTime } from '../services/timeUtils';
 const LOGO_F1 = require('../assets/logo_f1plus.png');
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 
-const formatDateTime = (isoString?: string) => {
+const formatDateTime = (isoString?: string | null) => {
   if (!isoString) return '';
   try {
     const date = new Date(isoString);
@@ -61,6 +63,60 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
   const isFinalizingRef = useRef(false);
   const isReadOnly = planning?.status === 'Ejecutado' || isPreview || context?.currentUser?.role !== 'Trabajador';
 
+  // ── Sincronización desde BD al abrir pantalla con status potencialmente desactualizado ──
+  // Cubre dos casos:
+  //   1. Ver informe: planificación "Ejecutada" → descarga datos actualizados del informe.
+  //   2. Actividad reabierta: caché local dice "Ejecutado" pero en BD está "Planificado"/"En ejecución"
+  //      → sincroniza para obtener el status real y habilitar edición.
+  const [isSyncingFromDb, setIsSyncingFromDb] = useState(false);
+  const hasSyncedFromDbRef = useRef<string | null>(null); // guarda el planningId ya sincronizado
+
+  useEffect(() => {
+    if (
+      planningId &&
+      context?.isApiConnected &&
+      context?.fetchAndSyncPlanning &&
+      hasSyncedFromDbRef.current !== planningId
+    ) {
+      hasSyncedFromDbRef.current = planningId;
+      setIsSyncingFromDb(true);
+      context.fetchAndSyncPlanning(planningId).finally(() => {
+        setIsSyncingFromDb(false);
+      });
+    }
+  }, [planningId, context?.isApiConnected]);
+
+  // ── Iniciar ejecución automáticamente si el trabajador abre una actividad Planificada ──
+  // Se dispara también cuando el status cambia post-sincronización (actividad reabierta).
+  useEffect(() => {
+    // Si viene del Calendario como vista previa (isPreview), no verificamos fechas ni la iniciamos.
+    // Además, solo los Trabajadores pueden poner en ejecución una actividad.
+    if (!isPreview && planning && planning.status !== 'En ejecución' && planning.status !== 'Ejecutado' && context?.currentUser?.role === 'Trabajador') {
+      const now = new Date();
+      const todayString = getSantiagoTodayString();
+
+      
+      if (planning.date !== todayString) {
+        Alert.alert(
+          'Acción no permitida',
+          `Esta actividad está planificada para el ${planning.date}. Solo puedes iniciar actividades programadas para el día de hoy.`,
+          [{ text: 'Entendido', onPress: () => navigation.goBack() }]
+        );
+        return;
+      }
+
+      context?.updatePlanning(planning.id, {
+        status: 'En ejecución',
+        startTime: now.toISOString(),
+      });
+      if (site) {
+        context?.updateSite(site.id, {
+          estadoExcel: 'En ejecución',
+        });
+      }
+    }
+  }, [planningId, isPreview, planning?.status]);
+
   // Actualizar el tiempo cada minuto
   useEffect(() => {
     if (planning?.status === 'En ejecución' && planning.startTime) {
@@ -77,6 +133,8 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
   const [fotoFueraContenedor, setFotoFueraContenedor] = useState(dg?.fotoFueraContenedor || '');
   const [fotosGeneralesSitio, setFotosGeneralesSitio] = useState<string[]>(dg?.fotosGeneralesSitio || ['', '']);
   const [fotosInteriorContenedor, setFotosInteriorContenedor] = useState<string[]>(dg?.fotosInteriorContenedor || ['', '']);
+  const [fotoDisplayRectificador, setFotoDisplayRectificador] = useState(dg?.fotoDisplayRectificador || '');
+  const [ampereDisplayRectificador, setAmpereDisplayRectificador] = useState(dg?.ampereDisplayRectificador || '');
 
   // Estados Apagado Equipo 3G1900
   const apagado = planning?.apagado3G;
@@ -130,6 +188,10 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
   const [fotoEspacioBaseband1Retirada, setFotoEspacioBaseband1Retirada] = useState(bafi?.fotoEspacioBaseband1Retirada || '');
   const [fotosConsumoFinal, setFotosConsumoFinal] = useState<string[]>(bafi?.fotosConsumoFinal || ['', '', '']);
   const [ampereConsumoFinal, setAmpereConsumoFinal] = useState<string[]>(bafi?.ampereConsumoFinal || ['', '', '']);
+  const [fotoConsumoInicialCc1, setFotoConsumoInicialCc1] = useState(bafi?.fotoConsumoInicialCc || '');
+  const [ampereConsumoInicialCc1, setAmpereConsumoInicialCc1] = useState(bafi?.ampereConsumoInicialCc || '');
+  const [fotoConsumoFinalCc1, setFotoConsumoFinalCc1] = useState(bafi?.fotoConsumoFinalCc || '');
+  const [ampereConsumoFinalCc1, setAmpereConsumoFinalCc1] = useState(bafi?.ampereConsumoFinalCc || '');
 
   const estadoBasebandSector1Ref = useRef(estadoBasebandSector1);
   const fotoBreakerBaseband1EncendidoRef = useRef(fotoBreakerBaseband1Encendido);
@@ -139,6 +201,10 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
   const fotoEspacioBaseband1RetiradaRef = useRef(fotoEspacioBaseband1Retirada);
   const fotosConsumoFinalRef = useRef(fotosConsumoFinal);
   const ampereConsumoFinalRef = useRef(ampereConsumoFinal);
+  const fotoConsumoInicialCc1Ref = useRef(fotoConsumoInicialCc1);
+  const ampereConsumoInicialCc1Ref = useRef(ampereConsumoInicialCc1);
+  const fotoConsumoFinalCc1Ref = useRef(fotoConsumoFinalCc1);
+  const ampereConsumoFinalCc1Ref = useRef(ampereConsumoFinalCc1);
 
   // Apagado BAFI S2 states & refs
   const bafiS2 = planning?.apagadoBafiSector2;
@@ -150,6 +216,10 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
   const [fotoEspacioBaseband2Retirada, setFotoEspacioBaseband2Retirada] = useState(bafiS2?.fotoEspacioBaseband2Retirada || '');
   const [fotosConsumoFinalS2, setFotosConsumoFinalS2] = useState<string[]>(bafiS2?.fotosConsumoFinal || ['', '', '']);
   const [ampereConsumoFinalS2, setAmpereConsumoFinalS2] = useState<string[]>(bafiS2?.ampereConsumoFinal || ['', '', '']);
+  const [fotoConsumoInicialCc2, setFotoConsumoInicialCc2] = useState(bafiS2?.fotoConsumoInicialCc || '');
+  const [ampereConsumoInicialCc2, setAmpereConsumoInicialCc2] = useState(bafiS2?.ampereConsumoInicialCc || '');
+  const [fotoConsumoFinalCc2, setFotoConsumoFinalCc2] = useState(bafiS2?.fotoConsumoFinalCc || '');
+  const [ampereConsumoFinalCc2, setAmpereConsumoFinalCc2] = useState(bafiS2?.ampereConsumoFinalCc || '');
 
   const estadoBasebandSector2Ref = useRef(estadoBasebandSector2);
   const fotoBreakerBaseband2EncendidoRef = useRef(fotoBreakerBaseband2Encendido);
@@ -159,6 +229,10 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
   const fotoEspacioBaseband2RetiradaRef = useRef(fotoEspacioBaseband2Retirada);
   const fotosConsumoFinalS2Ref = useRef(fotosConsumoFinalS2);
   const ampereConsumoFinalS2Ref = useRef(ampereConsumoFinalS2);
+  const fotoConsumoInicialCc2Ref = useRef(fotoConsumoInicialCc2);
+  const ampereConsumoInicialCc2Ref = useRef(ampereConsumoInicialCc2);
+  const fotoConsumoFinalCc2Ref = useRef(fotoConsumoFinalCc2);
+  const ampereConsumoFinalCc2Ref = useRef(ampereConsumoFinalCc2);
 
   // Apagado BAFI S3 states & refs
   const bafiS3 = planning?.apagadoBafiSector3;
@@ -170,6 +244,10 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
   const [fotoEspacioBaseband3Retirada, setFotoEspacioBaseband3Retirada] = useState(bafiS3?.fotoEspacioBaseband3Retirada || '');
   const [fotosConsumoFinalS3, setFotosConsumoFinalS3] = useState<string[]>(bafiS3?.fotosConsumoFinal || ['', '', '']);
   const [ampereConsumoFinalS3, setAmpereConsumoFinalS3] = useState<string[]>(bafiS3?.ampereConsumoFinal || ['', '', '']);
+  const [fotoConsumoInicialCc3, setFotoConsumoInicialCc3] = useState(bafiS3?.fotoConsumoInicialCc || '');
+  const [ampereConsumoInicialCc3, setAmpereConsumoInicialCc3] = useState(bafiS3?.ampereConsumoInicialCc || '');
+  const [fotoConsumoFinalCc3, setFotoConsumoFinalCc3] = useState(bafiS3?.fotoConsumoFinalCc || '');
+  const [ampereConsumoFinalCc3, setAmpereConsumoFinalCc3] = useState(bafiS3?.ampereConsumoFinalCc || '');
 
   const estadoBasebandSector3Ref = useRef(estadoBasebandSector3);
   const fotoBreakerBaseband3EncendidoRef = useRef(fotoBreakerBaseband3Encendido);
@@ -179,6 +257,10 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
   const fotoEspacioBaseband3RetiradaRef = useRef(fotoEspacioBaseband3Retirada);
   const fotosConsumoFinalS3Ref = useRef(fotosConsumoFinalS3);
   const ampereConsumoFinalS3Ref = useRef(ampereConsumoFinalS3);
+  const fotoConsumoInicialCc3Ref = useRef(fotoConsumoInicialCc3);
+  const ampereConsumoInicialCc3Ref = useRef(ampereConsumoInicialCc3);
+  const fotoConsumoFinalCc3Ref = useRef(fotoConsumoFinalCc3);
+  const ampereConsumoFinalCc3Ref = useRef(ampereConsumoFinalCc3);
 
   // Apagado Antena S1, S2, S3 states & refs
   const antena1 = planning?.apagadoAntenaSector1;
@@ -188,6 +270,10 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
   const [fotoBreakerAntenaS1Apagado, setFotoBreakerAntenaS1Apagado] = useState(antena1?.fotoBreakerAntenaS1Apagado || '');
   const [fotosConsumoFinalAntenaS1, setFotosConsumoFinalAntenaS1] = useState<string[]>(antena1?.fotosConsumoFinal || ['', '', '']);
   const [ampereConsumoFinalAntenaS1, setAmpereConsumoFinalAntenaS1] = useState<string[]>(antena1?.ampereConsumoFinal || ['', '', '']);
+  const [fotoConsumoInicialCcAntenaS1, setFotoConsumoInicialCcAntenaS1] = useState(antena1?.fotoConsumoInicialCc || '');
+  const [fotoConsumoFinalCcAntenaS1, setFotoConsumoFinalCcAntenaS1] = useState(antena1?.fotoConsumoFinalCc || '');
+  const [textoCompartida5GAntenaS1, setTextoCompartida5GAntenaS1] = useState(antena1?.textoCompartida5G || '');
+  const [confirmadoApagadoAntenaS1, setConfirmadoApagadoAntenaS1] = useState(antena1?.confirmadoApagadoAntena || false);
 
   const antena2 = planning?.apagadoAntenaSector2;
   const [estadoAntenaSector2, setEstadoAntenaSector2] = useState(antena2?.estadoAntenaSector2 || '');
@@ -196,6 +282,10 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
   const [fotoBreakerAntenaS2Apagado, setFotoBreakerAntenaS2Apagado] = useState(antena2?.fotoBreakerAntenaS2Apagado || '');
   const [fotosConsumoFinalAntenaS2, setFotosConsumoFinalAntenaS2] = useState<string[]>(antena2?.fotosConsumoFinal || ['', '', '']);
   const [ampereConsumoFinalAntenaS2, setAmpereConsumoFinalAntenaS2] = useState<string[]>(antena2?.ampereConsumoFinal || ['', '', '']);
+  const [fotoConsumoInicialCcAntenaS2, setFotoConsumoInicialCcAntenaS2] = useState(antena2?.fotoConsumoInicialCc || '');
+  const [fotoConsumoFinalCcAntenaS2, setFotoConsumoFinalCcAntenaS2] = useState(antena2?.fotoConsumoFinalCc || '');
+  const [textoCompartida5GAntenaS2, setTextoCompartida5GAntenaS2] = useState(antena2?.textoCompartida5G || '');
+  const [confirmadoApagadoAntenaS2, setConfirmadoApagadoAntenaS2] = useState(antena2?.confirmadoApagadoAntena || false);
 
   const antena3 = planning?.apagadoAntenaSector3;
   const [estadoAntenaSector3, setEstadoAntenaSector3] = useState(antena3?.estadoAntenaSector3 || '');
@@ -204,6 +294,10 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
   const [fotoBreakerAntenaS3Apagado, setFotoBreakerAntenaS3Apagado] = useState(antena3?.fotoBreakerAntenaS3Apagado || '');
   const [fotosConsumoFinalAntenaS3, setFotosConsumoFinalAntenaS3] = useState<string[]>(antena3?.fotosConsumoFinal || ['', '', '']);
   const [ampereConsumoFinalAntenaS3, setAmpereConsumoFinalAntenaS3] = useState<string[]>(antena3?.ampereConsumoFinal || ['', '', '']);
+  const [fotoConsumoInicialCcAntenaS3, setFotoConsumoInicialCcAntenaS3] = useState(antena3?.fotoConsumoInicialCc || '');
+  const [fotoConsumoFinalCcAntenaS3, setFotoConsumoFinalCcAntenaS3] = useState(antena3?.fotoConsumoFinalCc || '');
+  const [textoCompartida5GAntenaS3, setTextoCompartida5GAntenaS3] = useState(antena3?.textoCompartida5G || '');
+  const [confirmadoApagadoAntenaS3, setConfirmadoApagadoAntenaS3] = useState(antena3?.confirmadoApagadoAntena || false);
 
   const [isBafiGroupExpanded, setIsBafiGroupExpanded] = useState(false);
   const [isAntenasGroupExpanded, setIsAntenasGroupExpanded] = useState(false);
@@ -214,6 +308,10 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
   const fotoBreakerAntenaS1ApagadoRef = useRef(fotoBreakerAntenaS1Apagado);
   const fotosConsumoFinalAntenaS1Ref = useRef(fotosConsumoFinalAntenaS1);
   const ampereConsumoFinalAntenaS1Ref = useRef(ampereConsumoFinalAntenaS1);
+  const fotoConsumoInicialCcAntenaS1Ref = useRef(fotoConsumoInicialCcAntenaS1);
+  const fotoConsumoFinalCcAntenaS1Ref = useRef(fotoConsumoFinalCcAntenaS1);
+  const textoCompartida5GAntenaS1Ref = useRef(textoCompartida5GAntenaS1);
+  const confirmadoApagadoAntenaS1Ref = useRef(confirmadoApagadoAntenaS1);
 
   const estadoAntenaSector2Ref = useRef(estadoAntenaSector2);
   const fotoBreakerAntenaS2EncendidoRef = useRef(fotoBreakerAntenaS2Encendido);
@@ -221,6 +319,10 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
   const fotoBreakerAntenaS2ApagadoRef = useRef(fotoBreakerAntenaS2Apagado);
   const fotosConsumoFinalAntenaS2Ref = useRef(fotosConsumoFinalAntenaS2);
   const ampereConsumoFinalAntenaS2Ref = useRef(ampereConsumoFinalAntenaS2);
+  const fotoConsumoInicialCcAntenaS2Ref = useRef(fotoConsumoInicialCcAntenaS2);
+  const fotoConsumoFinalCcAntenaS2Ref = useRef(fotoConsumoFinalCcAntenaS2);
+  const textoCompartida5GAntenaS2Ref = useRef(textoCompartida5GAntenaS2);
+  const confirmadoApagadoAntenaS2Ref = useRef(confirmadoApagadoAntenaS2);
 
   const estadoAntenaSector3Ref = useRef(estadoAntenaSector3);
   const fotoBreakerAntenaS3EncendidoRef = useRef(fotoBreakerAntenaS3Encendido);
@@ -228,6 +330,10 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
   const fotoBreakerAntenaS3ApagadoRef = useRef(fotoBreakerAntenaS3Apagado);
   const fotosConsumoFinalAntenaS3Ref = useRef(fotosConsumoFinalAntenaS3);
   const ampereConsumoFinalAntenaS3Ref = useRef(ampereConsumoFinalAntenaS3);
+  const fotoConsumoInicialCcAntenaS3Ref = useRef(fotoConsumoInicialCcAntenaS3);
+  const fotoConsumoFinalCcAntenaS3Ref = useRef(fotoConsumoFinalCcAntenaS3);
+  const textoCompartida5GAntenaS3Ref = useRef(textoCompartida5GAntenaS3);
+  const confirmadoApagadoAntenaS3Ref = useRef(confirmadoApagadoAntenaS3);
 
   // Alarmas Externas states & refs
   const alarmas = planning?.alarmasExternas;
@@ -263,6 +369,18 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
   const [fotoSitio1, setFotoSitio1] = useState(evidencia?.fotoSitio1 || '');
   const [fotoSitio2, setFotoSitio2] = useState(evidencia?.fotoSitio2 || '');
   const [fotoEstructuraSalida, setFotoEstructuraSalida] = useState(evidencia?.fotoEstructuraSalida || '');
+  const [fotosConsumoFinalCaEvidencia, setFotosConsumoFinalCaEvidencia] = useState<string[]>(
+    evidencia?.fotosConsumoFinalCaEvidencia || (tipoEmpalme === 'Trifásico' ? ['', '', ''] : [''])
+  );
+  const [ampereConsumoFinalCaEvidencia, setAmpereConsumoFinalCaEvidencia] = useState<string[]>(
+    evidencia?.ampereConsumoFinalCaEvidencia || (tipoEmpalme === 'Trifásico' ? ['', '', ''] : [''])
+  );
+  const [fotoConsumoFinalCcRectificador, setFotoConsumoFinalCcRectificador] = useState(
+    evidencia?.fotoConsumoFinalCcRectificador || ''
+  );
+  const [ampereDisplayRectificadorFinal, setAmpereDisplayRectificadorFinal] = useState(
+    evidencia?.ampereDisplayRectificadorFinal || ''
+  );
 
   const fotoRectificadorRef = useRef(fotoRectificador);
   const fotoContenedor1Ref = useRef(fotoContenedor1);
@@ -270,41 +388,23 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
   const fotoSitio1Ref = useRef(fotoSitio1);
   const fotoSitio2Ref = useRef(fotoSitio2);
   const fotoEstructuraSalidaRef = useRef(fotoEstructuraSalida);
+  const fotosConsumoFinalCaEvidenciaRef = useRef(fotosConsumoFinalCaEvidencia);
+  const ampereConsumoFinalCaEvidenciaRef = useRef(ampereConsumoFinalCaEvidencia);
+  const fotoConsumoFinalCcRectificadorRef = useRef(fotoConsumoFinalCcRectificador);
+  const ampereDisplayRectificadorFinalRef = useRef(ampereDisplayRectificadorFinal);
 
   // Refs estables para guardar sin crear dependencias reactivas
   const planningIdRef = useRef(planning?.id);
   const observacionesRef = useRef(observaciones);
   const fotosRef = useRef(fotos);
 
-  useEffect(() => {
-    // Si viene del Calendario como vista previa (isPreview), no verificamos fechas ni la iniciamos.
-    // Además, solo los Trabajadores pueden poner en ejecución una actividad.
-    if (!isPreview && planning && planning.status !== 'En ejecución' && planning.status !== 'Ejecutado' && context?.currentUser?.role === 'Trabajador') {
-      const now = new Date();
-      const todayString = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-      
-      if (planning.date !== todayString) {
-        Alert.alert(
-          'Acción no permitida',
-          `Esta actividad está planificada para el ${planning.date}. Solo puedes iniciar actividades programadas para el día de hoy.`,
-          [{ text: 'Entendido', onPress: () => navigation.goBack() }]
-        );
-        return;
-      }
-
-      context?.updatePlanning(planning.id, {
-        status: 'En ejecución',
-        startTime: now.toISOString(),
-      });
-      if (site) {
-        context?.updateSite(site.id, {
-          estadoExcel: 'En ejecución',
-        });
-      }
-    }
-  }, [planningId, isPreview]);
+  // Estados para controlar el popup de avance de la subida
+  const [uploadVisible, setUploadVisible] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadStatus, setUploadStatus] = useState('');
 
   const contextRef = useRef(context);
+
 
   // Refs Datos Generales
   const tipoEstructuraRef = useRef(tipoEstructura);
@@ -316,6 +416,8 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
   const fotoSectorMedidorRef = useRef(fotoSectorMedidor);
   const numeroMedidorRef = useRef(numeroMedidor);
   const lecturaConsumoRef = useRef(lecturaConsumo);
+  const fotoDisplayRectificadorRef = useRef(fotoDisplayRectificador);
+  const ampereDisplayRectificadorRef = useRef(ampereDisplayRectificador);
   
   const fotoEstructuraRef = useRef(fotoEstructura);
   const fotoFueraContenedorRef = useRef(fotoFueraContenedor);
@@ -351,6 +453,8 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
   fotoSectorMedidorRef.current = fotoSectorMedidor;
   numeroMedidorRef.current = numeroMedidor;
   lecturaConsumoRef.current = lecturaConsumo;
+  fotoDisplayRectificadorRef.current = fotoDisplayRectificador;
+  ampereDisplayRectificadorRef.current = ampereDisplayRectificador;
   
   fotoEstructuraRef.current = fotoEstructura;
   fotoFueraContenedorRef.current = fotoFueraContenedor;
@@ -380,6 +484,10 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
   fotoEspacioBaseband1RetiradaRef.current = fotoEspacioBaseband1Retirada;
   fotosConsumoFinalRef.current = fotosConsumoFinal;
   ampereConsumoFinalRef.current = ampereConsumoFinal;
+  fotoConsumoInicialCc1Ref.current = fotoConsumoInicialCc1;
+  ampereConsumoInicialCc1Ref.current = ampereConsumoInicialCc1;
+  fotoConsumoFinalCc1Ref.current = fotoConsumoFinalCc1;
+  ampereConsumoFinalCc1Ref.current = ampereConsumoFinalCc1;
 
   estadoBasebandSector2Ref.current = estadoBasebandSector2;
   fotoBreakerBaseband2EncendidoRef.current = fotoBreakerBaseband2Encendido;
@@ -389,6 +497,10 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
   fotoEspacioBaseband2RetiradaRef.current = fotoEspacioBaseband2Retirada;
   fotosConsumoFinalS2Ref.current = fotosConsumoFinalS2;
   ampereConsumoFinalS2Ref.current = ampereConsumoFinalS2;
+  fotoConsumoInicialCc2Ref.current = fotoConsumoInicialCc2;
+  ampereConsumoInicialCc2Ref.current = ampereConsumoInicialCc2;
+  fotoConsumoFinalCc2Ref.current = fotoConsumoFinalCc2;
+  ampereConsumoFinalCc2Ref.current = ampereConsumoFinalCc2;
 
   estadoBasebandSector3Ref.current = estadoBasebandSector3;
   fotoBreakerBaseband3EncendidoRef.current = fotoBreakerBaseband3Encendido;
@@ -398,6 +510,10 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
   fotoEspacioBaseband3RetiradaRef.current = fotoEspacioBaseband3Retirada;
   fotosConsumoFinalS3Ref.current = fotosConsumoFinalS3;
   ampereConsumoFinalS3Ref.current = ampereConsumoFinalS3;
+  fotoConsumoInicialCc3Ref.current = fotoConsumoInicialCc3;
+  ampereConsumoInicialCc3Ref.current = ampereConsumoInicialCc3;
+  fotoConsumoFinalCc3Ref.current = fotoConsumoFinalCc3;
+  ampereConsumoFinalCc3Ref.current = ampereConsumoFinalCc3;
 
   estadoAntenaSector1Ref.current = estadoAntenaSector1;
   fotoBreakerAntenaS1EncendidoRef.current = fotoBreakerAntenaS1Encendido;
@@ -405,6 +521,10 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
   fotoBreakerAntenaS1ApagadoRef.current = fotoBreakerAntenaS1Apagado;
   fotosConsumoFinalAntenaS1Ref.current = fotosConsumoFinalAntenaS1;
   ampereConsumoFinalAntenaS1Ref.current = ampereConsumoFinalAntenaS1;
+  fotoConsumoInicialCcAntenaS1Ref.current = fotoConsumoInicialCcAntenaS1;
+  fotoConsumoFinalCcAntenaS1Ref.current = fotoConsumoFinalCcAntenaS1;
+  textoCompartida5GAntenaS1Ref.current = textoCompartida5GAntenaS1;
+  confirmadoApagadoAntenaS1Ref.current = confirmadoApagadoAntenaS1;
 
   estadoAntenaSector2Ref.current = estadoAntenaSector2;
   fotoBreakerAntenaS2EncendidoRef.current = fotoBreakerAntenaS2Encendido;
@@ -412,6 +532,10 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
   fotoBreakerAntenaS2ApagadoRef.current = fotoBreakerAntenaS2Apagado;
   fotosConsumoFinalAntenaS2Ref.current = fotosConsumoFinalAntenaS2;
   ampereConsumoFinalAntenaS2Ref.current = ampereConsumoFinalAntenaS2;
+  fotoConsumoInicialCcAntenaS2Ref.current = fotoConsumoInicialCcAntenaS2;
+  fotoConsumoFinalCcAntenaS2Ref.current = fotoConsumoFinalCcAntenaS2;
+  textoCompartida5GAntenaS2Ref.current = textoCompartida5GAntenaS2;
+  confirmadoApagadoAntenaS2Ref.current = confirmadoApagadoAntenaS2;
 
   estadoAntenaSector3Ref.current = estadoAntenaSector3;
   fotoBreakerAntenaS3EncendidoRef.current = fotoBreakerAntenaS3Encendido;
@@ -419,6 +543,10 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
   fotoBreakerAntenaS3ApagadoRef.current = fotoBreakerAntenaS3Apagado;
   fotosConsumoFinalAntenaS3Ref.current = fotosConsumoFinalAntenaS3;
   ampereConsumoFinalAntenaS3Ref.current = ampereConsumoFinalAntenaS3;
+  fotoConsumoInicialCcAntenaS3Ref.current = fotoConsumoInicialCcAntenaS3;
+  fotoConsumoFinalCcAntenaS3Ref.current = fotoConsumoFinalCcAntenaS3;
+  textoCompartida5GAntenaS3Ref.current = textoCompartida5GAntenaS3;
+  confirmadoApagadoAntenaS3Ref.current = confirmadoApagadoAntenaS3;
 
   const getProgressColor = (pct: number) => {
     if (pct === 100) return colors.success;
@@ -456,14 +584,248 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
   fotoSitio1Ref.current = fotoSitio1;
   fotoSitio2Ref.current = fotoSitio2;
   fotoEstructuraSalidaRef.current = fotoEstructuraSalida;
+  fotosConsumoFinalCaEvidenciaRef.current = fotosConsumoFinalCaEvidencia;
+  ampereConsumoFinalCaEvidenciaRef.current = ampereConsumoFinalCaEvidencia;
+  fotoConsumoFinalCcRectificadorRef.current = fotoConsumoFinalCcRectificador;
+  ampereDisplayRectificadorFinalRef.current = ampereDisplayRectificadorFinal;
   
   // Estado temporal para procesar la imagen pendiente
   const [pendingUri, setPendingUri] = useState<string | null>(null);
   const [pendingTimestamp, setPendingTimestamp] = useState<string>('');
   const [pendingCoords, setPendingCoords] = useState<{lat: number, lng: number} | null>(null);
+  const [entryCoords, setEntryCoords] = useState<{lat: number, lng: number} | null>(null);
+
+  useEffect(() => {
+    const fetchEntryLocation = async () => {
+      if (isReadOnly) return;
+      try {
+        console.log("📍 Capturando geolocalización al ingresar al apartado...");
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status === 'granted') {
+          const location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+          const coords = { lat: location.coords.latitude, lng: location.coords.longitude };
+          console.log("📍 Geolocalización de entrada obtenida con éxito:", coords);
+          setEntryCoords(coords);
+        } else {
+          console.warn("⚠️ Permiso de ubicación denegado al ingresar al apartado.");
+        }
+      } catch (e) {
+        console.warn("❌ Error al capturar geolocalización al ingresar al apartado:", e);
+      }
+    };
+
+    fetchEntryLocation();
+  }, [planningId, isReadOnly]);
+
   // Para saber a qué campo asignar la foto que se está procesando (usamos Ref para evitar problemas de cierres en async)
   const photoTargetRef = useRef<string>('hallazgos');
   const pendingIndexRef = useRef<number | null>(null);
+
+  const hasLoadedDataRef = useRef(false);
+
+  // ── Sincronizar estados de fotos desde el contexto cuando el planning cambia ──
+  // Esto es crítico para coordinadores/admins en modo lectura: cuando fetchAndSyncPlanning
+  // actualiza el planning en el contexto (después de descargar el informe), los useState
+  // que ya se inicializaron no se re-inicializan automáticamente. Este efecto los sincroniza.
+  useEffect(() => {
+    if (!planning) return;
+
+    // Si no es read-only y ya cargamos los datos (después de terminar la sincronización), no volver a sobreescribir para no perder cambios locales en caliente.
+    if (!isReadOnly && hasLoadedDataRef.current && !isSyncingFromDb) return;
+
+    if (!isSyncingFromDb) {
+      hasLoadedDataRef.current = true;
+    }
+
+    // Helper local: preservar URLs para el trabajador, y para coordinadores solo URLs del servidor (http://...)
+    const isWorker = context?.currentUser?.role === 'Trabajador';
+    const srv = (uri?: string) => {
+      if (!uri) return '';
+      if (isWorker) return uri; // El trabajador puede ver fotos locales (file://) y de red (http://)
+      return uri.startsWith('http') ? uri : ''; // El coordinador solo ve fotos subidas
+    };
+    const srvArr = (arr?: string[]) => (arr || []).map(u => srv(u)).filter(Boolean);
+
+    // Hallazgos Previos
+    if (planning.hallazgos) {
+      setObservaciones(planning.hallazgos.observaciones || '');
+      setFotos((planning.hallazgos.fotos || []).map(u => srv(u)).filter(Boolean));
+    }
+
+    // Alarmas Externas
+    if (planning.alarmasExternas) {
+      const al = planning.alarmasExternas;
+      setTecnologiaAlarmas(al.tecnologiaAlarmas || '');
+      setFotoAlarmasOVP(srv(al.fotoAlarmasOVP));
+      setFotoAlarmasEquipos(srv(al.fotoAlarmasEquipos));
+      setMigraranTecnologia(al.migraranTecnologia || '');
+      setFotoAlarmasMigradas(srv(al.fotoAlarmasMigradas));
+      setFotoAlarmasFinalesOVP(srv(al.fotoAlarmasFinalesOVP));
+      setImplementaranAlarmas(al.implementaranAlarmas || '');
+      setMotivosNoImplementacion(al.motivosNoImplementacion || '');
+      setFotoNoImplementacion(srv(al.fotoNoImplementacion));
+      setTecnologiaImplementacion(al.tecnologiaImplementacion || '');
+      setFotoAlarmasImplementadas(srv(al.fotoAlarmasImplementadas));
+    }
+
+    // Evidencia Salida
+    if (planning.evidenciaSalida) {
+      const ev = planning.evidenciaSalida;
+      setFotoRectificador(srv(ev.fotoRectificador));
+      setFotoContenedor1(srv(ev.fotoContenedor1));
+      setFotoContenedor2(srv(ev.fotoContenedor2));
+      setFotoSitio1(srv(ev.fotoSitio1));
+      setFotoSitio2(srv(ev.fotoSitio2));
+      setFotoEstructuraSalida(srv(ev.fotoEstructuraSalida));
+      
+      const empalmeType = planning.datosGenerales?.tipoEmpalme || '';
+      setFotosConsumoFinalCaEvidencia(srvArr(ev.fotosConsumoFinalCaEvidencia || (empalmeType === 'Trifásico' ? ['', '', ''] : [''])));
+      setAmpereConsumoFinalCaEvidencia(ev.ampereConsumoFinalCaEvidencia || (empalmeType === 'Trifásico' ? ['', '', ''] : ['']));
+      setFotoConsumoFinalCcRectificador(srv(ev.fotoConsumoFinalCcRectificador));
+      setAmpereDisplayRectificadorFinal(ev.ampereDisplayRectificadorFinal || '');
+    }
+
+    // Datos Generales
+    if (planning.datosGenerales) {
+      const dg = planning.datosGenerales;
+      setTipoEstructura(dg.tipoEstructura || '');
+      setTipoContenedor(dg.tipoContenedor || '');
+      setTipoEmpalme(dg.tipoEmpalme || '');
+      setFotosEmpalme(srvArr(dg.fotosEmpalme));
+      setCapacidadProteccion(dg.capacidadProteccion || '');
+      setFotoMedidor(srv(dg.fotoMedidor));
+      setFotoSectorMedidor(srv(dg.fotoSectorMedidor));
+      setNumeroMedidor(dg.numeroMedidor || '');
+      setLecturaConsumo(dg.lecturaConsumo || '');
+      setFotoEstructura(srv(dg.fotoEstructura));
+      setFotoFueraContenedor(srv(dg.fotoFueraContenedor));
+      setFotosGeneralesSitio(srvArr(dg.fotosGeneralesSitio));
+      setFotosInteriorContenedor(srvArr(dg.fotosInteriorContenedor));
+      setFotoDisplayRectificador(srv(dg.fotoDisplayRectificador));
+      setAmpereDisplayRectificador(dg.ampereDisplayRectificador || '');
+      setAmpereEmpalme(dg.ampereEmpalme || ['', '', '']);
+    }
+
+    // Apagado 3G
+    if (planning.apagado3G) {
+      const ap = planning.apagado3G;
+      setEstado3G(ap.estado3G || '');
+      setSeApagara3G(ap.seApagara3G || '');
+      setEstadoRRU(ap.estadoRRU || '');
+      setSeApagaraRRU(ap.seApagaraRRU || '');
+      setFotoEquipo3GEncendido(srv(ap.fotoEquipo3GEncendido));
+      setFotoBreaker3GEncendido(srv(ap.fotoBreaker3GEncendido));
+      setFotoBreaker3GApagado(srv(ap.fotoBreaker3GApagado));
+      setFotoEquipo3GApagado(srv(ap.fotoEquipo3GApagado));
+      setFotoEspacioRetirado(srv(ap.fotoEspacioRetirado));
+      setSeRetirara3G(ap.seRetirara3G || '');
+      setFotoRRUEncendido(srv(ap.fotoRRUEncendido));
+      setFotoRRUApagado(srv(ap.fotoRRUApagado));
+      setAmpere3GEncendido(ap.ampere3GEncendido || '');
+    }
+
+    // Apagado BAFI S1
+    if (planning.apagadoBafiSector1) {
+      const b = planning.apagadoBafiSector1;
+      setEstadoBasebandSector1(b.estadoBasebandSector1 || '');
+      setFotoBreakerBaseband1Encendido(srv(b.fotoBreakerBaseband1Encendido));
+      setFotoBaseband1Encendida(srv(b.fotoBaseband1Encendida));
+      setConfirmadoApagadoRetirar(b.confirmadoApagadoRetirar || false);
+      setFotoBreakerBaseband1Apagado(srv(b.fotoBreakerBaseband1Apagado));
+      setFotoEspacioBaseband1Retirada(srv(b.fotoEspacioBaseband1Retirada));
+      setFotosConsumoFinal(srvArr(b.fotosConsumoFinal));
+      setFotoConsumoInicialCc1(srv(b.fotoConsumoInicialCc));
+      setAmpereConsumoInicialCc1(b.ampereConsumoInicialCc || '');
+      setFotoConsumoFinalCc1(srv(b.fotoConsumoFinalCc));
+      setAmpereConsumoFinalCc1(b.ampereConsumoFinalCc || '');
+    }
+
+    // Apagado BAFI S2
+    if (planning.apagadoBafiSector2) {
+      const b = planning.apagadoBafiSector2;
+      setEstadoBasebandSector2(b.estadoBasebandSector2 || '');
+      setFotoBreakerBaseband2Encendido(srv(b.fotoBreakerBaseband2Encendido));
+      setFotoBaseband2Encendida(srv(b.fotoBaseband2Encendida));
+      setConfirmadoApagadoRetirarS2(b.confirmadoApagadoRetirar || false);
+      setFotoBreakerBaseband2Apagado(srv(b.fotoBreakerBaseband2Apagado));
+      setFotoEspacioBaseband2Retirada(srv(b.fotoEspacioBaseband2Retirada));
+      setFotosConsumoFinalS2(srvArr(b.fotosConsumoFinal));
+      setFotoConsumoInicialCc2(srv(b.fotoConsumoInicialCc));
+      setAmpereConsumoInicialCc2(b.ampereConsumoInicialCc || '');
+      setFotoConsumoFinalCc2(srv(b.fotoConsumoFinalCc));
+      setAmpereConsumoFinalCc2(b.ampereConsumoFinalCc || '');
+    }
+
+    // Apagado BAFI S3
+    if (planning.apagadoBafiSector3) {
+      const b = planning.apagadoBafiSector3;
+      setEstadoBasebandSector3(b.estadoBasebandSector3 || '');
+      setFotoBreakerBaseband3Encendido(srv(b.fotoBreakerBaseband3Encendido));
+      setFotoBaseband3Encendida(srv(b.fotoBaseband3Encendida));
+      setConfirmadoApagadoRetirarS3(b.confirmadoApagadoRetirar || false);
+      setFotoBreakerBaseband3Apagado(srv(b.fotoBreakerBaseband3Apagado));
+      setFotoEspacioBaseband3Retirada(srv(b.fotoEspacioBaseband3Retirada));
+      setFotosConsumoFinalS3(srvArr(b.fotosConsumoFinal));
+      setFotoConsumoInicialCc3(srv(b.fotoConsumoInicialCc));
+      setAmpereConsumoInicialCc3(b.ampereConsumoInicialCc || '');
+      setFotoConsumoFinalCc3(srv(b.fotoConsumoFinalCc));
+      setAmpereConsumoFinalCc3(b.ampereConsumoFinalCc || '');
+    }
+
+    // Antenas S1, S2, S3
+    if (planning.apagadoAntenaSector1) {
+      const a = planning.apagadoAntenaSector1;
+      setEstadoAntenaSector1(a.estadoAntenaSector1 || '');
+      setFotoBreakerAntenaS1Encendido(srv(a.fotoBreakerAntenaS1Encendido));
+      setSeApagaraAntenaS1(a.seApagaraAntenaS1 || '');
+      setFotoBreakerAntenaS1Apagado(srv(a.fotoBreakerAntenaS1Apagado));
+      setFotosConsumoFinalAntenaS1(srvArr(a.fotosConsumoFinal));
+      setFotoConsumoInicialCcAntenaS1(srv(a.fotoConsumoInicialCc));
+      setFotoConsumoFinalCcAntenaS1(srv(a.fotoConsumoFinalCc));
+      setTextoCompartida5GAntenaS1(a.textoCompartida5G || '');
+      setConfirmadoApagadoAntenaS1(a.confirmadoApagadoAntena || false);
+    }
+    if (planning.apagadoAntenaSector2) {
+      const a = planning.apagadoAntenaSector2;
+      setEstadoAntenaSector2(a.estadoAntenaSector2 || '');
+      setFotoBreakerAntenaS2Encendido(srv(a.fotoBreakerAntenaS2Encendido));
+      setSeApagaraAntenaS2(a.seApagaraAntenaS2 || '');
+      setFotoBreakerAntenaS2Apagado(srv(a.fotoBreakerAntenaS2Apagado));
+      setFotosConsumoFinalAntenaS2(srvArr(a.fotosConsumoFinal));
+      setFotoConsumoInicialCcAntenaS2(srv(a.fotoConsumoInicialCc));
+      setFotoConsumoFinalCcAntenaS2(srv(a.fotoConsumoFinalCc));
+      setTextoCompartida5GAntenaS2(a.textoCompartida5G || '');
+      setConfirmadoApagadoAntenaS2(a.confirmadoApagadoAntena || false);
+    }
+    if (planning.apagadoAntenaSector3) {
+      const a = planning.apagadoAntenaSector3;
+      setEstadoAntenaSector3(a.estadoAntenaSector3 || '');
+      setFotoBreakerAntenaS3Encendido(srv(a.fotoBreakerAntenaS3Encendido));
+      setSeApagaraAntenaS3(a.seApagaraAntenaS3 || '');
+      setFotoBreakerAntenaS3Apagado(srv(a.fotoBreakerAntenaS3Apagado));
+      setFotosConsumoFinalAntenaS3(srvArr(a.fotosConsumoFinal));
+      setFotoConsumoInicialCcAntenaS3(srv(a.fotoConsumoInicialCc));
+      setFotoConsumoFinalCcAntenaS3(srv(a.fotoConsumoFinalCc));
+      setTextoCompartida5GAntenaS3(a.textoCompartida5G || '');
+      setConfirmadoApagadoAntenaS3(a.confirmadoApagadoAntena || false);
+    }
+
+    // Cambio de Chapa (iLOQ)
+    if (planning.cambioChapa) {
+      const cc = planning.cambioChapa;
+      setTipoChapa(cc.tipoChapa || '');
+      setNroSerie(cc.nroSerie || '');
+      setEstadoInicialChapa(cc.estadoInicial || '');
+      setFotoChapaAnterior(srv(cc.fotoChapaAnterior));
+      setFotoNuevaChapa(srv(cc.fotoNuevaChapa));
+      setFotoLlaveProgramacion(srv(cc.fotoLlaveProgramacion));
+      setFotoPuertaCerrada(srv(cc.fotoPuertaCerrada));
+      setEstadoFinalChapa(cc.estadoFinal || '');
+      setJustificacionChapa(cc.justificacion || '');
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [planning, isSyncingFromDb, isReadOnly]);
+
 
   // Estado para UI
   const [isProcessing, setIsProcessing] = useState(false);
@@ -501,6 +863,8 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
             fotosGeneralesSitio: fotosGeneralesSitioRef.current,
             fotosInteriorContenedor: fotosInteriorContenedorRef.current,
             ampereEmpalme: ampereEmpalmeRef.current,
+            fotoDisplayRectificador: fotoDisplayRectificadorRef.current,
+            ampereDisplayRectificador: ampereDisplayRectificadorRef.current,
           },
           cambioChapa: isIloq ? {
             tipoChapa: tipoChapaRef.current,
@@ -537,6 +901,10 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
             fotoEspacioBaseband1Retirada: fotoEspacioBaseband1RetiradaRef.current,
             fotosConsumoFinal: fotosConsumoFinalRef.current,
             ampereConsumoFinal: ampereConsumoFinalRef.current,
+            fotoConsumoInicialCc: fotoConsumoInicialCc1Ref.current,
+            ampereConsumoInicialCc: ampereConsumoInicialCc1Ref.current,
+            fotoConsumoFinalCc: fotoConsumoFinalCc1Ref.current,
+            ampereConsumoFinalCc: ampereConsumoFinalCc1Ref.current,
           } : undefined,
           apagadoBafiSector2: isApagadoBafi ? {
             estadoBasebandSector2: estadoBasebandSector2Ref.current,
@@ -547,6 +915,10 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
             fotoEspacioBaseband2Retirada: fotoEspacioBaseband2RetiradaRef.current,
             fotosConsumoFinal: fotosConsumoFinalS2Ref.current,
             ampereConsumoFinal: ampereConsumoFinalS2Ref.current,
+            fotoConsumoInicialCc: fotoConsumoInicialCc2Ref.current,
+            ampereConsumoInicialCc: ampereConsumoInicialCc2Ref.current,
+            fotoConsumoFinalCc: fotoConsumoFinalCc2Ref.current,
+            ampereConsumoFinalCc: ampereConsumoFinalCc2Ref.current,
           } : undefined,
           apagadoBafiSector3: isApagadoBafi ? {
             estadoBasebandSector3: estadoBasebandSector3Ref.current,
@@ -557,6 +929,10 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
             fotoEspacioBaseband3Retirada: fotoEspacioBaseband3RetiradaRef.current,
             fotosConsumoFinal: fotosConsumoFinalS3Ref.current,
             ampereConsumoFinal: ampereConsumoFinalS3Ref.current,
+            fotoConsumoInicialCc: fotoConsumoInicialCc3Ref.current,
+            ampereConsumoInicialCc: ampereConsumoInicialCc3Ref.current,
+            fotoConsumoFinalCc: fotoConsumoFinalCc3Ref.current,
+            ampereConsumoFinalCc: ampereConsumoFinalCc3Ref.current,
           } : undefined,
            apagadoAntenaSector1: isApagadoBafi ? {
             estadoAntenaSector1: estadoAntenaSector1Ref.current,
@@ -565,6 +941,10 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
             fotoBreakerAntenaS1Apagado: fotoBreakerAntenaS1ApagadoRef.current,
             fotosConsumoFinal: fotosConsumoFinalAntenaS1Ref.current,
             ampereConsumoFinal: ampereConsumoFinalAntenaS1Ref.current,
+            fotoConsumoInicialCc: fotoConsumoInicialCcAntenaS1Ref.current,
+            fotoConsumoFinalCc: fotoConsumoFinalCcAntenaS1Ref.current,
+            textoCompartida5G: textoCompartida5GAntenaS1Ref.current,
+            confirmadoApagadoAntena: confirmadoApagadoAntenaS1Ref.current,
           } : undefined,
           apagadoAntenaSector2: isApagadoBafi ? {
             estadoAntenaSector2: estadoAntenaSector2Ref.current,
@@ -573,6 +953,10 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
             fotoBreakerAntenaS2Apagado: fotoBreakerAntenaS2ApagadoRef.current,
             fotosConsumoFinal: fotosConsumoFinalAntenaS2Ref.current,
             ampereConsumoFinal: ampereConsumoFinalAntenaS2Ref.current,
+            fotoConsumoInicialCc: fotoConsumoInicialCcAntenaS2Ref.current,
+            fotoConsumoFinalCc: fotoConsumoFinalCcAntenaS2Ref.current,
+            textoCompartida5G: textoCompartida5GAntenaS2Ref.current,
+            confirmadoApagadoAntena: confirmadoApagadoAntenaS2Ref.current,
           } : undefined,
           apagadoAntenaSector3: isApagadoBafi ? {
             estadoAntenaSector3: estadoAntenaSector3Ref.current,
@@ -581,6 +965,10 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
             fotoBreakerAntenaS3Apagado: fotoBreakerAntenaS3ApagadoRef.current,
             fotosConsumoFinal: fotosConsumoFinalAntenaS3Ref.current,
             ampereConsumoFinal: ampereConsumoFinalAntenaS3Ref.current,
+            fotoConsumoInicialCc: fotoConsumoInicialCcAntenaS3Ref.current,
+            fotoConsumoFinalCc: fotoConsumoFinalCcAntenaS3Ref.current,
+            textoCompartida5G: textoCompartida5GAntenaS3Ref.current,
+            confirmadoApagadoAntena: confirmadoApagadoAntenaS3Ref.current,
           } : undefined,
           alarmasExternas: !isIloq ? {
             tecnologiaAlarmas: tecnologiaAlarmasRef.current,
@@ -602,6 +990,10 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
             fotoSitio1: fotoSitio1Ref.current,
             fotoSitio2: fotoSitio2Ref.current,
             fotoEstructuraSalida: fotoEstructuraSalidaRef.current,
+            fotosConsumoFinalCaEvidencia: fotosConsumoFinalCaEvidenciaRef.current,
+            ampereConsumoFinalCaEvidencia: ampereConsumoFinalCaEvidenciaRef.current,
+            fotoConsumoFinalCcRectificador: fotoConsumoFinalCcRectificadorRef.current,
+            ampereDisplayRectificadorFinal: ampereDisplayRectificadorFinalRef.current,
           } : undefined,
         });
       }
@@ -638,6 +1030,9 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
           fotoFueraContenedor: fotoFueraContenedorRef.current,
           fotosGeneralesSitio: fotosGeneralesSitioRef.current,
           fotosInteriorContenedor: fotosInteriorContenedorRef.current,
+          ampereEmpalme: ampereEmpalmeRef.current,
+          fotoDisplayRectificador: fotoDisplayRectificadorRef.current,
+          ampereDisplayRectificador: ampereDisplayRectificadorRef.current,
         }
       });
     }
@@ -673,6 +1068,10 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
           fotoSitio1: fotoSitio1Ref.current,
           fotoSitio2: fotoSitio2Ref.current,
           fotoEstructuraSalida: fotoEstructuraSalidaRef.current,
+          fotosConsumoFinalCaEvidencia: fotosConsumoFinalCaEvidenciaRef.current,
+          ampereConsumoFinalCaEvidencia: ampereConsumoFinalCaEvidenciaRef.current,
+          fotoConsumoFinalCcRectificador: fotoConsumoFinalCcRectificadorRef.current,
+          ampereDisplayRectificadorFinal: ampereDisplayRectificadorFinalRef.current,
         }
       });
     }
@@ -691,6 +1090,10 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
             fotoEspacioBaseband1Retirada: fotoEspacioBaseband1RetiradaRef.current,
             fotosConsumoFinal: fotosConsumoFinalRef.current,
             ampereConsumoFinal: ampereConsumoFinalRef.current,
+            fotoConsumoInicialCc: fotoConsumoInicialCc1Ref.current,
+            ampereConsumoInicialCc: ampereConsumoInicialCc1Ref.current,
+            fotoConsumoFinalCc: fotoConsumoFinalCc1Ref.current,
+            ampereConsumoFinalCc: ampereConsumoFinalCc1Ref.current,
           }
         });
       } else if (isIloq) {
@@ -740,6 +1143,10 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
           fotoEspacioBaseband2Retirada: fotoEspacioBaseband2RetiradaRef.current,
           fotosConsumoFinal: fotosConsumoFinalS2Ref.current,
           ampereConsumoFinal: ampereConsumoFinalS2Ref.current,
+          fotoConsumoInicialCc: fotoConsumoInicialCc2Ref.current,
+          ampereConsumoInicialCc: ampereConsumoInicialCc2Ref.current,
+          fotoConsumoFinalCc: fotoConsumoFinalCc2Ref.current,
+          ampereConsumoFinalCc: ampereConsumoFinalCc2Ref.current,
         }
       });
     }
@@ -757,6 +1164,10 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
           fotoEspacioBaseband3Retirada: fotoEspacioBaseband3RetiradaRef.current,
           fotosConsumoFinal: fotosConsumoFinalS3Ref.current,
           ampereConsumoFinal: ampereConsumoFinalS3Ref.current,
+          fotoConsumoInicialCc: fotoConsumoInicialCc3Ref.current,
+          ampereConsumoInicialCc: ampereConsumoInicialCc3Ref.current,
+          fotoConsumoFinalCc: fotoConsumoFinalCc3Ref.current,
+          ampereConsumoFinalCc: ampereConsumoFinalCc3Ref.current,
         }
       });
     }
@@ -772,6 +1183,10 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
           fotoBreakerAntenaS1Apagado: fotoBreakerAntenaS1ApagadoRef.current,
           fotosConsumoFinal: fotosConsumoFinalAntenaS1Ref.current,
           ampereConsumoFinal: ampereConsumoFinalAntenaS1Ref.current,
+          fotoConsumoInicialCc: fotoConsumoInicialCcAntenaS1Ref.current,
+          fotoConsumoFinalCc: fotoConsumoFinalCcAntenaS1Ref.current,
+          textoCompartida5G: textoCompartida5GAntenaS1Ref.current,
+          confirmadoApagadoAntena: confirmadoApagadoAntenaS1Ref.current,
         }
       });
     }
@@ -787,6 +1202,10 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
           fotoBreakerAntenaS2Apagado: fotoBreakerAntenaS2ApagadoRef.current,
           fotosConsumoFinal: fotosConsumoFinalAntenaS2Ref.current,
           ampereConsumoFinal: ampereConsumoFinalAntenaS2Ref.current,
+          fotoConsumoInicialCc: fotoConsumoInicialCcAntenaS2Ref.current,
+          fotoConsumoFinalCc: fotoConsumoFinalCcAntenaS2Ref.current,
+          textoCompartida5G: textoCompartida5GAntenaS2Ref.current,
+          confirmadoApagadoAntena: confirmadoApagadoAntenaS2Ref.current,
         }
       });
     }
@@ -802,6 +1221,10 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
           fotoBreakerAntenaS3Apagado: fotoBreakerAntenaS3ApagadoRef.current,
           fotosConsumoFinal: fotosConsumoFinalAntenaS3Ref.current,
           ampereConsumoFinal: ampereConsumoFinalAntenaS3Ref.current,
+          fotoConsumoInicialCc: fotoConsumoInicialCcAntenaS3Ref.current,
+          fotoConsumoFinalCc: fotoConsumoFinalCcAntenaS3Ref.current,
+          textoCompartida5G: textoCompartida5GAntenaS3Ref.current,
+          confirmadoApagadoAntena: confirmadoApagadoAntenaS3Ref.current,
         }
       });
     }
@@ -830,6 +1253,14 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
       saveEvidenciaSalida();
     }
     setActiveFolder(null);
+  };
+
+  // Helper: en modo lectura (coordinador/admin), filtrar rutas locales del móvil del técnico.
+  // Solo se muestran fotos con URL del servidor (http://...). Las rutas locales se tratan como vacías.
+  const resolvePhotoUri = (uri: string | undefined): string => {
+    if (!uri || !uri.trim()) return '';
+    if (!isReadOnly) return uri;
+    return uri.startsWith('http') ? uri : '';
   };
 
   const toggleFolder = () => {
@@ -986,32 +1417,131 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
     setFotoAlarmasFinalesOVP('');
   };
 
-  const handleEstadoAntenaSector1Change = (val: string) => {
-    setEstadoAntenaSector1(val);
+  const handleSeApagaraAntenaS1Change = (val: string) => {
+    setSeApagaraAntenaS1(val);
+    setConfirmadoApagadoAntenaS1(false);
     setFotoBreakerAntenaS1Encendido('');
-    setSeApagaraAntenaS1('');
+    setFotoConsumoInicialCcAntenaS1('');
     setFotoBreakerAntenaS1Apagado('');
-    setFotosConsumoFinalAntenaS1(['', '', '']);
-    setAmpereConsumoFinalAntenaS1(['', '', '']);
+    setFotoConsumoFinalCcAntenaS1('');
+    setTextoCompartida5GAntenaS1('');
+
+    if (val === 'Si') {
+      setEstadoAntenaSector1('Encendida');
+    } else if (val === 'No') {
+      setEstadoAntenaSector1('Apagada');
+      setTextoCompartida5GAntenaS1('Compartida con 5G');
+    } else if (val === 'N/A') {
+      setEstadoAntenaSector1('N/A');
+    }
   };
 
-  const handleEstadoAntenaSector2Change = (val: string) => {
-    setEstadoAntenaSector2(val);
+  const handleSeApagaraAntenaS2Change = (val: string) => {
+    setSeApagaraAntenaS2(val);
+    setConfirmadoApagadoAntenaS2(false);
     setFotoBreakerAntenaS2Encendido('');
-    setSeApagaraAntenaS2('');
+    setFotoConsumoInicialCcAntenaS2('');
     setFotoBreakerAntenaS2Apagado('');
-    setFotosConsumoFinalAntenaS2(['', '', '']);
-    setAmpereConsumoFinalAntenaS2(['', '', '']);
+    setFotoConsumoFinalCcAntenaS2('');
+    setTextoCompartida5GAntenaS2('');
+
+    if (val === 'Si') {
+      setEstadoAntenaSector2('Encendida');
+    } else if (val === 'No') {
+      setEstadoAntenaSector2('Apagada');
+      setTextoCompartida5GAntenaS2('Compartida con 5G');
+    } else if (val === 'N/A') {
+      setEstadoAntenaSector2('N/A');
+    }
   };
 
-  const handleEstadoAntenaSector3Change = (val: string) => {
-    setEstadoAntenaSector3(val);
+  const handleSeApagaraAntenaS3Change = (val: string) => {
+    setSeApagaraAntenaS3(val);
+    setConfirmadoApagadoAntenaS3(false);
     setFotoBreakerAntenaS3Encendido('');
-    setSeApagaraAntenaS3('');
+    setFotoConsumoInicialCcAntenaS3('');
     setFotoBreakerAntenaS3Apagado('');
-    setFotosConsumoFinalAntenaS3(['', '', '']);
-    setAmpereConsumoFinalAntenaS3(['', '', '']);
+    setFotoConsumoFinalCcAntenaS3('');
+    setTextoCompartida5GAntenaS3('');
+
+    if (val === 'Si') {
+      setEstadoAntenaSector3('Encendida');
+    } else if (val === 'No') {
+      setEstadoAntenaSector3('Apagada');
+      setTextoCompartida5GAntenaS3('Compartida con 5G');
+    } else if (val === 'N/A') {
+      setEstadoAntenaSector3('N/A');
+    }
   };
+
+  useEffect(() => {
+    if (
+      seApagaraAntenaS1 === 'Si' &&
+      fotoBreakerAntenaS1Encendido &&
+      fotoConsumoInicialCcAntenaS1 &&
+      !confirmadoApagadoAntenaS1
+    ) {
+      Alert.alert(
+        'Apagar Breaker y Registrar Consumo Final',
+        '',
+        [
+          {
+            text: 'OK',
+            onPress: () => {
+              setConfirmadoApagadoAntenaS1(true);
+            }
+          }
+        ],
+        { cancelable: false }
+      );
+    }
+  }, [fotoBreakerAntenaS1Encendido, fotoConsumoInicialCcAntenaS1, seApagaraAntenaS1, confirmadoApagadoAntenaS1]);
+
+  useEffect(() => {
+    if (
+      seApagaraAntenaS2 === 'Si' &&
+      fotoBreakerAntenaS2Encendido &&
+      fotoConsumoInicialCcAntenaS2 &&
+      !confirmadoApagadoAntenaS2
+    ) {
+      Alert.alert(
+        'Apagar Breaker y Registrar Consumo Final',
+        '',
+        [
+          {
+            text: 'OK',
+            onPress: () => {
+              setConfirmadoApagadoAntenaS2(true);
+            }
+          }
+        ],
+        { cancelable: false }
+      );
+    }
+  }, [fotoBreakerAntenaS2Encendido, fotoConsumoInicialCcAntenaS2, seApagaraAntenaS2, confirmadoApagadoAntenaS2]);
+
+  useEffect(() => {
+    if (
+      seApagaraAntenaS3 === 'Si' &&
+      fotoBreakerAntenaS3Encendido &&
+      fotoConsumoInicialCcAntenaS3 &&
+      !confirmadoApagadoAntenaS3
+    ) {
+      Alert.alert(
+        'Apagar Breaker y Registrar Consumo Final',
+        '',
+        [
+          {
+            text: 'OK',
+            onPress: () => {
+              setConfirmadoApagadoAntenaS3(true);
+            }
+          }
+        ],
+        { cancelable: false }
+      );
+    }
+  }, [fotoBreakerAntenaS3Encendido, fotoConsumoInicialCcAntenaS3, seApagaraAntenaS3, confirmadoApagadoAntenaS3]);
 
   const handleEstado3GChange = (val: string) => {
     setEstado3G(val);
@@ -1057,11 +1587,11 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
 
     if (val === 'Apagado') {
       Alert.alert(
-        'Retirar Baseband',
-        'Proceder a retirar Baseband S1',
+        'Registrar Consumo Final y luego retirar Baseband S1',
+        '',
         [
           {
-            text: 'Confirmar realización',
+            text: 'OK',
             onPress: () => {
               setConfirmadoApagadoRetirar(true);
             }
@@ -1075,16 +1605,15 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
   useEffect(() => {
     if (
       estadoBasebandSector1 === 'Encendido' &&
-      fotoBreakerBaseband1Encendido &&
-      fotoBaseband1Encendida &&
+      fotoConsumoInicialCc1 &&
       !confirmadoApagadoRetirar
     ) {
       Alert.alert(
-        'Apagar Breaker y Retirar',
-        'Proceder a apagar breaker y retirar Baseband S1',
+        'Apagar Breaker, Registrar Consumo Final y luego retirar Baseband S1',
+        '',
         [
           {
-            text: 'Confirmar realización',
+            text: 'OK',
             onPress: () => {
               setConfirmadoApagadoRetirar(true);
             }
@@ -1093,7 +1622,7 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
         { cancelable: false }
       );
     }
-  }, [fotoBreakerBaseband1Encendido, fotoBaseband1Encendida, estadoBasebandSector1]);
+  }, [fotoConsumoInicialCc1, estadoBasebandSector1]);
 
   const handleEstadoBasebandSector2Change = (val: string) => {
     setEstadoBasebandSector2(val);
@@ -1107,11 +1636,11 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
 
     if (val === 'Apagado') {
       Alert.alert(
-        'Retirar Baseband',
-        'Proceder a retirar Baseband S2',
+        'Registrar Consumo Final y luego retirar Baseband S2',
+        '',
         [
           {
-            text: 'Confirmar realización',
+            text: 'OK',
             onPress: () => {
               setConfirmadoApagadoRetirarS2(true);
             }
@@ -1125,16 +1654,15 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
   useEffect(() => {
     if (
       estadoBasebandSector2 === 'Encendido' &&
-      fotoBreakerBaseband2Encendido &&
-      fotoBaseband2Encendida &&
+      fotoConsumoInicialCc2 &&
       !confirmadoApagadoRetirarS2
     ) {
       Alert.alert(
-        'Apagar Breaker y Retirar',
-        'Proceder a apagar breaker y retirar Baseband S2',
+        'Apagar Breaker, Registrar Consumo Final y luego retirar Baseband S2',
+        '',
         [
           {
-            text: 'Confirmar realización',
+            text: 'OK',
             onPress: () => {
               setConfirmadoApagadoRetirarS2(true);
             }
@@ -1143,7 +1671,7 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
         { cancelable: false }
       );
     }
-  }, [fotoBreakerBaseband2Encendido, fotoBaseband2Encendida, estadoBasebandSector2]);
+  }, [fotoConsumoInicialCc2, estadoBasebandSector2]);
 
   const handleEstadoBasebandSector3Change = (val: string) => {
     setEstadoBasebandSector3(val);
@@ -1157,11 +1685,11 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
 
     if (val === 'Apagado') {
       Alert.alert(
-        'Retirar Baseband',
-        'Proceder a retirar Baseband S3',
+        'Registrar Consumo Final y luego retirar Baseband S3',
+        '',
         [
           {
-            text: 'Confirmar realización',
+            text: 'OK',
             onPress: () => {
               setConfirmadoApagadoRetirarS3(true);
             }
@@ -1175,16 +1703,15 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
   useEffect(() => {
     if (
       estadoBasebandSector3 === 'Encendido' &&
-      fotoBreakerBaseband3Encendido &&
-      fotoBaseband3Encendida &&
+      fotoConsumoInicialCc3 &&
       !confirmadoApagadoRetirarS3
     ) {
       Alert.alert(
-        'Apagar Breaker y Retirar',
-        'Proceder a apagar breaker y retirar Baseband S3',
+        'Apagar Breaker, Registrar Consumo Final y luego retirar Baseband S3',
+        '',
         [
           {
-            text: 'Confirmar realización',
+            text: 'OK',
             onPress: () => {
               setConfirmadoApagadoRetirarS3(true);
             }
@@ -1193,7 +1720,7 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
         { cancelable: false }
       );
     }
-  }, [fotoBreakerBaseband3Encendido, fotoBaseband3Encendida, estadoBasebandSector3]);
+  }, [fotoConsumoInicialCc3, estadoBasebandSector3]);
 
   const viewShotRef = useRef<ViewShot>(null);
 
@@ -1242,16 +1769,21 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
       const now = new Date();
       setPendingTimestamp(now.toLocaleString('es-CL'));
 
-      // Obtener ubicación real del dispositivo
-      let coords = { lat: site?.lat || 0, lng: site?.lng || 0 }; // Fallback a coords del sitio
-      try {
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status === 'granted') {
-          const location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
-          coords = { lat: location.coords.latitude, lng: location.coords.longitude };
+      // Obtener ubicación: usar la capturada al ingresar al apartado (entryCoords), o fallback a coords del sitio
+      let coords = entryCoords || { lat: site?.lat || 0, lng: site?.lng || 0 };
+      
+      // Si por alguna razón no se ha capturado entryCoords todavía, intentamos obtenerla en caliente
+      if (!entryCoords) {
+        try {
+          const { status } = await Location.requestForegroundPermissionsAsync();
+          if (status === 'granted') {
+            const location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+            coords = { lat: location.coords.latitude, lng: location.coords.longitude };
+            setEntryCoords(coords); // Guardar para fotos subsiguientes
+          }
+        } catch (e) {
+          console.warn("No se pudo obtener la ubicación actual en caliente, usando coordenadas del sitio.");
         }
-      } catch (e) {
-        console.warn("No se pudo obtener la ubicación actual, usando coordenadas del sitio.");
       }
       
       setPendingCoords(coords);
@@ -1282,6 +1814,13 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
               setActiveAmpereTarget(null);
               setActiveAmpereIndex(index);
               setTempAmpere(ampereEmpalmeRef.current[index || 0] || '');
+              setShowAmpereModal(true);
+            } else if (target === 'fotoDisplayRectificador') {
+              setFotoDisplayRectificador(watermarkedUri);
+              // Abrir modal de ampere
+              setActiveAmpereTarget('fotoDisplayRectificador');
+              setActiveAmpereIndex(0);
+              setTempAmpere(ampereDisplayRectificadorRef.current || '');
               setShowAmpereModal(true);
             } else if (target === 'fotoMedidor') {
               setFotoMedidor(watermarkedUri);
@@ -1333,6 +1872,10 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
               setFotoBreakerBaseband1Apagado(watermarkedUri);
             } else if (target === 'fotoEspacioBaseband1Retirada') {
               setFotoEspacioBaseband1Retirada(watermarkedUri);
+            } else if (target === 'fotoConsumoInicialCc1') {
+              setFotoConsumoInicialCc1(watermarkedUri);
+            } else if (target === 'fotoConsumoFinalCc1') {
+              setFotoConsumoFinalCc1(watermarkedUri);
             } else if (target === 'fotosConsumoFinal') {
               setFotosConsumoFinal(prev => {
                 const newFotos = [...prev];
@@ -1351,6 +1894,10 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
               setFotoBreakerBaseband2Apagado(watermarkedUri);
             } else if (target === 'fotoEspacioBaseband2Retirada') {
               setFotoEspacioBaseband2Retirada(watermarkedUri);
+            } else if (target === 'fotoConsumoInicialCc2') {
+              setFotoConsumoInicialCc2(watermarkedUri);
+            } else if (target === 'fotoConsumoFinalCc2') {
+              setFotoConsumoFinalCc2(watermarkedUri);
             } else if (target === 'fotosConsumoFinalS2') {
               setFotosConsumoFinalS2(prev => {
                 const newFotos = [...prev];
@@ -1369,6 +1916,10 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
               setFotoBreakerBaseband3Apagado(watermarkedUri);
             } else if (target === 'fotoEspacioBaseband3Retirada') {
               setFotoEspacioBaseband3Retirada(watermarkedUri);
+            } else if (target === 'fotoConsumoInicialCc3') {
+              setFotoConsumoInicialCc3(watermarkedUri);
+            } else if (target === 'fotoConsumoFinalCc3') {
+              setFotoConsumoFinalCc3(watermarkedUri);
             } else if (target === 'fotosConsumoFinalS3') {
               setFotosConsumoFinalS3(prev => {
                 const newFotos = [...prev];
@@ -1421,6 +1972,18 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
               setActiveAmpereIndex(index);
               setTempAmpere(ampereConsumoFinalAntenaS3Ref.current[index || 0] || '');
               setShowAmpereModal(true);
+            } else if (target === 'fotoConsumoInicialCcAntenaS1') {
+              setFotoConsumoInicialCcAntenaS1(watermarkedUri);
+            } else if (target === 'fotoConsumoFinalCcAntenaS1') {
+              setFotoConsumoFinalCcAntenaS1(watermarkedUri);
+            } else if (target === 'fotoConsumoInicialCcAntenaS2') {
+              setFotoConsumoInicialCcAntenaS2(watermarkedUri);
+            } else if (target === 'fotoConsumoFinalCcAntenaS2') {
+              setFotoConsumoFinalCcAntenaS2(watermarkedUri);
+            } else if (target === 'fotoConsumoInicialCcAntenaS3') {
+              setFotoConsumoInicialCcAntenaS3(watermarkedUri);
+            } else if (target === 'fotoConsumoFinalCcAntenaS3') {
+              setFotoConsumoFinalCcAntenaS3(watermarkedUri);
             } else if (target === 'fotoAlarmasOVP') {
               setFotoAlarmasOVP(watermarkedUri);
             } else if (target === 'fotoAlarmasEquipos') {
@@ -1445,6 +2008,22 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
               setFotoSitio2(watermarkedUri);
             } else if (target === 'fotoEstructuraSalida') {
               setFotoEstructuraSalida(watermarkedUri);
+            } else if (target === 'fotosConsumoFinalCaEvidencia') {
+              setFotosConsumoFinalCaEvidencia(prev => {
+                const newFotos = [...prev];
+                if (index !== null) newFotos[index] = watermarkedUri;
+                return newFotos;
+              });
+              setActiveAmpereTarget('fotosConsumoFinalCaEvidencia');
+              setActiveAmpereIndex(index);
+              setTempAmpere(ampereConsumoFinalCaEvidenciaRef.current[index || 0] || '');
+              setShowAmpereModal(true);
+            } else if (target === 'fotoConsumoFinalCcRectificador') {
+              setFotoConsumoFinalCcRectificador(watermarkedUri);
+              setActiveAmpereTarget('fotoConsumoFinalCcRectificador');
+              setActiveAmpereIndex(0);
+              setTempAmpere(ampereDisplayRectificadorFinalRef.current || '');
+              setShowAmpereModal(true);
             }
           }
         } catch (e) {
@@ -1460,6 +2039,13 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
             // Abrir modal de ampere (fallback)
             setActiveAmpereIndex(index);
             setTempAmpere(ampereEmpalmeRef.current[index || 0] || '');
+            setShowAmpereModal(true);
+          } else if (target === 'fotoDisplayRectificador') {
+            setFotoDisplayRectificador(asset.uri);
+            // Abrir modal de ampere
+            setActiveAmpereTarget('fotoDisplayRectificador');
+            setActiveAmpereIndex(0);
+            setTempAmpere(ampereDisplayRectificadorRef.current || '');
             setShowAmpereModal(true);
           } else if (target === 'fotoMedidor') {
             setFotoMedidor(asset.uri);
@@ -1511,6 +2097,10 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
             setFotoBreakerBaseband1Apagado(asset.uri);
           } else if (target === 'fotoEspacioBaseband1Retirada') {
             setFotoEspacioBaseband1Retirada(asset.uri);
+          } else if (target === 'fotoConsumoInicialCc1') {
+            setFotoConsumoInicialCc1(asset.uri);
+          } else if (target === 'fotoConsumoFinalCc1') {
+            setFotoConsumoFinalCc1(asset.uri);
           } else if (target === 'fotosConsumoFinal') {
             setFotosConsumoFinal(prev => {
               const newFotos = [...prev];
@@ -1529,6 +2119,10 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
             setFotoBreakerBaseband2Apagado(asset.uri);
           } else if (target === 'fotoEspacioBaseband2Retirada') {
             setFotoEspacioBaseband2Retirada(asset.uri);
+          } else if (target === 'fotoConsumoInicialCc2') {
+            setFotoConsumoInicialCc2(asset.uri);
+          } else if (target === 'fotoConsumoFinalCc2') {
+            setFotoConsumoFinalCc2(asset.uri);
           } else if (target === 'fotosConsumoFinalS2') {
             setFotosConsumoFinalS2(prev => {
               const newFotos = [...prev];
@@ -1547,6 +2141,10 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
             setFotoBreakerBaseband3Apagado(asset.uri);
           } else if (target === 'fotoEspacioBaseband3Retirada') {
             setFotoEspacioBaseband3Retirada(asset.uri);
+          } else if (target === 'fotoConsumoInicialCc3') {
+            setFotoConsumoInicialCc3(asset.uri);
+          } else if (target === 'fotoConsumoFinalCc3') {
+            setFotoConsumoFinalCc3(asset.uri);
           } else if (target === 'fotosConsumoFinalS3') {
             setFotosConsumoFinalS3(prev => {
               const newFotos = [...prev];
@@ -1599,6 +2197,18 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
             setActiveAmpereIndex(index);
             setTempAmpere(ampereConsumoFinalAntenaS3Ref.current[index || 0] || '');
             setShowAmpereModal(true);
+          } else if (target === 'fotoConsumoInicialCcAntenaS1') {
+            setFotoConsumoInicialCcAntenaS1(asset.uri);
+          } else if (target === 'fotoConsumoFinalCcAntenaS1') {
+            setFotoConsumoFinalCcAntenaS1(asset.uri);
+          } else if (target === 'fotoConsumoInicialCcAntenaS2') {
+            setFotoConsumoInicialCcAntenaS2(asset.uri);
+          } else if (target === 'fotoConsumoFinalCcAntenaS2') {
+            setFotoConsumoFinalCcAntenaS2(asset.uri);
+          } else if (target === 'fotoConsumoInicialCcAntenaS3') {
+            setFotoConsumoInicialCcAntenaS3(asset.uri);
+          } else if (target === 'fotoConsumoFinalCcAntenaS3') {
+            setFotoConsumoFinalCcAntenaS3(asset.uri);
           } else if (target === 'fotoAlarmasOVP') {
             setFotoAlarmasOVP(asset.uri);
           } else if (target === 'fotoAlarmasEquipos') {
@@ -1623,13 +2233,29 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
             setFotoSitio2(asset.uri);
           } else if (target === 'fotoEstructuraSalida') {
             setFotoEstructuraSalida(asset.uri);
+          } else if (target === 'fotosConsumoFinalCaEvidencia') {
+            setFotosConsumoFinalCaEvidencia(prev => {
+              const newFotos = [...prev];
+              if (index !== null) newFotos[index] = asset.uri;
+              return newFotos;
+            });
+            setActiveAmpereTarget('fotosConsumoFinalCaEvidencia');
+            setActiveAmpereIndex(index);
+            setTempAmpere(ampereConsumoFinalCaEvidenciaRef.current[index || 0] || '');
+            setShowAmpereModal(true);
+          } else if (target === 'fotoConsumoFinalCcRectificador') {
+            setFotoConsumoFinalCcRectificador(asset.uri);
+            setActiveAmpereTarget('fotoConsumoFinalCcRectificador');
+            setActiveAmpereIndex(0);
+            setTempAmpere(ampereDisplayRectificadorFinalRef.current || '');
+            setShowAmpereModal(true);
           }
         } finally {
           setPendingUri(null);
           setIsProcessing(false);
           pendingIndexRef.current = null;
         }
-      }, 1000);
+      }, 300); // Optimizado a 300ms (antes 1000ms) para acelerar el procesamiento de fotos sin perder el render offscreen
     }
   };
 
@@ -1643,7 +2269,11 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
   const openCamera = async () => {
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
     if (status !== 'granted') { Alert.alert('Permiso denegado', 'Necesitamos acceso a tu cámara.'); return; }
-    const result = await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.6 });
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      quality: 0.6,
+      cameraType: ImagePicker.CameraType.back,
+    });
     processImageResult(result);
   };
 
@@ -1674,6 +2304,9 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
               const newFotos = [...fotosEmpalme];
               newFotos[index] = '';
               setFotosEmpalme(newFotos);
+            } else if (field === 'fotoDisplayRectificador') {
+              setFotoDisplayRectificador('');
+              setAmpereDisplayRectificador('');
             } else if (field === 'fotoMedidor') setFotoMedidor('');
             else if (field === 'fotoSectorMedidor') setFotoSectorMedidor('');
             else if (field === 'fotoEstructura') setFotoEstructura('');
@@ -1702,132 +2335,162 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
               setConfirmadoApagadoRetirar(false);
               setFotoBreakerBaseband1Apagado('');
               setFotoEspacioBaseband1Retirada('');
-              setFotosConsumoFinal(['', '', '']);
-              setAmpereConsumoFinal(['', '', '']);
+              setFotoConsumoFinalCc1('');
+              setAmpereConsumoFinalCc1('');
             }
             else if (field === 'fotoBaseband1Encendida') {
               setFotoBaseband1Encendida('');
               setConfirmadoApagadoRetirar(false);
               setFotoBreakerBaseband1Apagado('');
               setFotoEspacioBaseband1Retirada('');
-              setFotosConsumoFinal(['', '', '']);
-              setAmpereConsumoFinal(['', '', '']);
+              setFotoConsumoFinalCc1('');
+              setAmpereConsumoFinalCc1('');
             }
-            else if (field === 'fotoBreakerBaseband1Apagado') setFotoBreakerBaseband1Apagado('');
-            else if (field === 'fotoEspacioBaseband1Retirada') setFotoEspacioBaseband1Retirada('');
-            else if (field === 'fotosConsumoFinal' && index !== null) {
-              const newFotos = [...fotosConsumoFinal];
-              newFotos[index] = '';
-              setFotosConsumoFinal(newFotos);
-              const newAmpere = [...ampereConsumoFinal];
-              newAmpere[index] = '';
-              setAmpereConsumoFinal(newAmpere);
+            else if (field === 'fotoConsumoInicialCc1') {
+              setFotoConsumoInicialCc1('');
+              setAmpereConsumoInicialCc1('');
+              setConfirmadoApagadoRetirar(false);
+              setFotoBreakerBaseband1Apagado('');
+              setFotoEspacioBaseband1Retirada('');
+              setFotoConsumoFinalCc1('');
+              setAmpereConsumoFinalCc1('');
+            }
+            else if (field === 'fotoBreakerBaseband1Apagado') {
+              setFotoBreakerBaseband1Apagado('');
+            }
+            else if (field === 'fotoEspacioBaseband1Retirada') {
+              setFotoEspacioBaseband1Retirada('');
+            }
+            else if (field === 'fotoConsumoFinalCc1') {
+              setFotoConsumoFinalCc1('');
+              setAmpereConsumoFinalCc1('');
             }
             else if (field === 'fotoBreakerBaseband2Encendido') {
               setFotoBreakerBaseband2Encendido('');
               setConfirmadoApagadoRetirarS2(false);
               setFotoBreakerBaseband2Apagado('');
               setFotoEspacioBaseband2Retirada('');
-              setFotosConsumoFinalS2(['', '', '']);
-              setAmpereConsumoFinalS2(['', '', '']);
+              setFotoConsumoFinalCc2('');
+              setAmpereConsumoFinalCc2('');
             }
             else if (field === 'fotoBaseband2Encendida') {
               setFotoBaseband2Encendida('');
               setConfirmadoApagadoRetirarS2(false);
               setFotoBreakerBaseband2Apagado('');
               setFotoEspacioBaseband2Retirada('');
-              setFotosConsumoFinalS2(['', '', '']);
-              setAmpereConsumoFinalS2(['', '', '']);
+              setFotoConsumoFinalCc2('');
+              setAmpereConsumoFinalCc2('');
             }
-            else if (field === 'fotoBreakerBaseband2Apagado') setFotoBreakerBaseband2Apagado('');
-            else if (field === 'fotoEspacioBaseband2Retirada') setFotoEspacioBaseband2Retirada('');
-            else if (field === 'fotosConsumoFinalS2' && index !== null) {
-              const newFotos = [...fotosConsumoFinalS2];
-              newFotos[index] = '';
-              setFotosConsumoFinalS2(newFotos);
-              const newAmpere = [...ampereConsumoFinalS2];
-              newAmpere[index] = '';
-              setAmpereConsumoFinalS2(newAmpere);
+            else if (field === 'fotoConsumoInicialCc2') {
+              setFotoConsumoInicialCc2('');
+              setAmpereConsumoInicialCc2('');
+              setConfirmadoApagadoRetirarS2(false);
+              setFotoBreakerBaseband2Apagado('');
+              setFotoEspacioBaseband2Retirada('');
+              setFotoConsumoFinalCc2('');
+              setAmpereConsumoFinalCc2('');
+            }
+            else if (field === 'fotoBreakerBaseband2Apagado') {
+              setFotoBreakerBaseband2Apagado('');
+            }
+            else if (field === 'fotoEspacioBaseband2Retirada') {
+              setFotoEspacioBaseband2Retirada('');
+            }
+            else if (field === 'fotoConsumoFinalCc2') {
+              setFotoConsumoFinalCc2('');
+              setAmpereConsumoFinalCc2('');
             }
             else if (field === 'fotoBreakerBaseband3Encendido') {
               setFotoBreakerBaseband3Encendido('');
               setConfirmadoApagadoRetirarS3(false);
               setFotoBreakerBaseband3Apagado('');
               setFotoEspacioBaseband3Retirada('');
-              setFotosConsumoFinalS3(['', '', '']);
-              setAmpereConsumoFinalS3(['', '', '']);
+              setFotoConsumoFinalCc3('');
+              setAmpereConsumoFinalCc3('');
             }
             else if (field === 'fotoBaseband3Encendida') {
               setFotoBaseband3Encendida('');
               setConfirmadoApagadoRetirarS3(false);
               setFotoBreakerBaseband3Apagado('');
               setFotoEspacioBaseband3Retirada('');
-              setFotosConsumoFinalS3(['', '', '']);
-              setAmpereConsumoFinalS3(['', '', '']);
+              setFotoConsumoFinalCc3('');
+              setAmpereConsumoFinalCc3('');
             }
-            else if (field === 'fotoBreakerBaseband3Apagado') setFotoBreakerBaseband3Apagado('');
-            else if (field === 'fotoEspacioBaseband3Retirada') setFotoEspacioBaseband3Retirada('');
-            else if (field === 'fotosConsumoFinalS3' && index !== null) {
-              const newFotos = [...fotosConsumoFinalS3];
-              newFotos[index] = '';
-              setFotosConsumoFinalS3(newFotos);
-              const newAmpere = [...ampereConsumoFinalS3];
-              newAmpere[index] = '';
-              setAmpereConsumoFinalS3(newAmpere);
+            else if (field === 'fotoConsumoInicialCc3') {
+              setFotoConsumoInicialCc3('');
+              setAmpereConsumoInicialCc3('');
+              setConfirmadoApagadoRetirarS3(false);
+              setFotoBreakerBaseband3Apagado('');
+              setFotoEspacioBaseband3Retirada('');
+              setFotoConsumoFinalCc3('');
+              setAmpereConsumoFinalCc3('');
+            }
+            else if (field === 'fotoBreakerBaseband3Apagado') {
+              setFotoBreakerBaseband3Apagado('');
+            }
+            else if (field === 'fotoEspacioBaseband3Retirada') {
+              setFotoEspacioBaseband3Retirada('');
+            }
+            else if (field === 'fotoConsumoFinalCc3') {
+              setFotoConsumoFinalCc3('');
+              setAmpereConsumoFinalCc3('');
             }
             else if (field === 'fotoBreakerAntenaS1Encendido') {
               setFotoBreakerAntenaS1Encendido('');
-              setSeApagaraAntenaS1('');
+              setConfirmadoApagadoAntenaS1(false);
+              setFotoConsumoInicialCcAntenaS1('');
               setFotoBreakerAntenaS1Apagado('');
-              setFotosConsumoFinalAntenaS1(['', '', '']);
-              setAmpereConsumoFinalAntenaS1(['', '', '']);
+              setFotoConsumoFinalCcAntenaS1('');
+            }
+            else if (field === 'fotoConsumoInicialCcAntenaS1') {
+              setFotoConsumoInicialCcAntenaS1('');
+              setConfirmadoApagadoAntenaS1(false);
+              setFotoBreakerAntenaS1Apagado('');
+              setFotoConsumoFinalCcAntenaS1('');
             }
             else if (field === 'fotoBreakerAntenaS1Apagado') {
               setFotoBreakerAntenaS1Apagado('');
             }
-            else if (field === 'fotosConsumoFinalAntenaS1' && index !== null) {
-              const newFotos = [...fotosConsumoFinalAntenaS1];
-              newFotos[index] = '';
-              setFotosConsumoFinalAntenaS1(newFotos);
-              const newAmpere = [...ampereConsumoFinalAntenaS1];
-              newAmpere[index] = '';
-              setAmpereConsumoFinalAntenaS1(newAmpere);
+            else if (field === 'fotoConsumoFinalCcAntenaS1') {
+              setFotoConsumoFinalCcAntenaS1('');
             }
             else if (field === 'fotoBreakerAntenaS2Encendido') {
               setFotoBreakerAntenaS2Encendido('');
-              setSeApagaraAntenaS2('');
+              setConfirmadoApagadoAntenaS2(false);
+              setFotoConsumoInicialCcAntenaS2('');
               setFotoBreakerAntenaS2Apagado('');
-              setFotosConsumoFinalAntenaS2(['', '', '']);
-              setAmpereConsumoFinalAntenaS2(['', '', '']);
+              setFotoConsumoFinalCcAntenaS2('');
+            }
+            else if (field === 'fotoConsumoInicialCcAntenaS2') {
+              setFotoConsumoInicialCcAntenaS2('');
+              setConfirmadoApagadoAntenaS2(false);
+              setFotoBreakerAntenaS2Apagado('');
+              setFotoConsumoFinalCcAntenaS2('');
             }
             else if (field === 'fotoBreakerAntenaS2Apagado') {
               setFotoBreakerAntenaS2Apagado('');
             }
-            else if (field === 'fotosConsumoFinalAntenaS2' && index !== null) {
-              const newFotos = [...fotosConsumoFinalAntenaS2];
-              newFotos[index] = '';
-              setFotosConsumoFinalAntenaS2(newFotos);
-              const newAmpere = [...ampereConsumoFinalAntenaS2];
-              newAmpere[index] = '';
-              setAmpereConsumoFinalAntenaS2(newAmpere);
+            else if (field === 'fotoConsumoFinalCcAntenaS2') {
+              setFotoConsumoFinalCcAntenaS2('');
             }
             else if (field === 'fotoBreakerAntenaS3Encendido') {
               setFotoBreakerAntenaS3Encendido('');
-              setSeApagaraAntenaS3('');
+              setConfirmadoApagadoAntenaS3(false);
+              setFotoConsumoInicialCcAntenaS3('');
               setFotoBreakerAntenaS3Apagado('');
-              setFotosConsumoFinalAntenaS3(['', '', '']);
-              setAmpereConsumoFinalAntenaS3(['', '', '']);
+              setFotoConsumoFinalCcAntenaS3('');
+            }
+            else if (field === 'fotoConsumoInicialCcAntenaS3') {
+              setFotoConsumoInicialCcAntenaS3('');
+              setConfirmadoApagadoAntenaS3(false);
+              setFotoBreakerAntenaS3Apagado('');
+              setFotoConsumoFinalCcAntenaS3('');
             }
             else if (field === 'fotoBreakerAntenaS3Apagado') {
               setFotoBreakerAntenaS3Apagado('');
             }
-            else if (field === 'fotosConsumoFinalAntenaS3' && index !== null) {
-              const newFotos = [...fotosConsumoFinalAntenaS3];
-              newFotos[index] = '';
-              setFotosConsumoFinalAntenaS3(newFotos);
-              const newAmpere = [...ampereConsumoFinalAntenaS3];
-              newAmpere[index] = '';
-              setAmpereConsumoFinalAntenaS3(newAmpere);
+            else if (field === 'fotoConsumoFinalCcAntenaS3') {
+              setFotoConsumoFinalCcAntenaS3('');
             }
             else if (field === 'fotoAlarmasOVP') setFotoAlarmasOVP('');
             else if (field === 'fotoAlarmasEquipos') setFotoAlarmasEquipos('');
@@ -1841,6 +2504,18 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
             else if (field === 'fotoSitio1') setFotoSitio1('');
             else if (field === 'fotoSitio2') setFotoSitio2('');
             else if (field === 'fotoEstructuraSalida') setFotoEstructuraSalida('');
+            else if (field === 'fotosConsumoFinalCaEvidencia' && index !== null) {
+              const newFotos = [...fotosConsumoFinalCaEvidencia];
+              newFotos[index] = '';
+              setFotosConsumoFinalCaEvidencia(newFotos);
+              const newAmperes = [...ampereConsumoFinalCaEvidencia];
+              newAmperes[index] = '';
+              setAmpereConsumoFinalCaEvidencia(newAmperes);
+            }
+            else if (field === 'fotoConsumoFinalCcRectificador') {
+              setFotoConsumoFinalCcRectificador('');
+              setAmpereDisplayRectificadorFinal('');
+            }
           } 
         }
       ]
@@ -1932,137 +2607,501 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
           { 
             text: 'Finalizar', 
             onPress: () => {
-              isFinalizingRef.current = true;
-              const now = new Date().toISOString();
-              context?.updatePlanning(planning.id, {
-                status: 'Ejecutado',
-                endTime: now,
-                hallazgos: {
-                  observaciones: observaciones,
-                  fotos: fotos,
-                },
-                datosGenerales: {
-                  tipoEstructura,
-                  tipoContenedor,
-                  tipoEmpalme,
-                  fotosEmpalme,
-                  capacidadProteccion,
-                  fotoMedidor,
-                  fotoSectorMedidor,
-                  numeroMedidor,
-                  lecturaConsumo,
-                  fotoEstructura,
-                  fotoFueraContenedor,
-                  fotosGeneralesSitio,
-                  fotosInteriorContenedor,
-                  ampereEmpalme,
-                },
-                cambioChapa: isIloq ? {
-                  tipoChapa,
-                  nroSerie,
-                  estadoInicial: estadoInicialChapa,
-                  fotoChapaAnterior,
-                  fotoNuevaChapa,
-                  fotoLlaveProgramacion,
-                  fotoPuertaCerrada,
-                  estadoFinal: estadoFinalChapa,
-                  justificacion: justificacionChapa,
-                } : undefined,
-                apagado3G: (!isIloq && !isApagadoBafi) ? {
-                  estado3G,
-                  seApagara3G,
-                  estadoRRU,
-                  seApagaraRRU,
-                  fotoEquipo3GEncendido,
-                  fotoBreaker3GEncendido,
-                  fotoBreaker3GApagado,
-                  fotoEquipo3GApagado,
-                  fotoEspacioRetirado,
-                  seRetirara3G,
-                  fotoRRUEncendido,
-                  fotoRRUApagado,
-                  ampere3GEncendido,
-                } : undefined,
-                apagadoBafiSector1: isApagadoBafi ? {
-                  estadoBasebandSector1,
-                  fotoBreakerBaseband1Encendido,
-                  fotoBaseband1Encendida,
-                  confirmadoApagadoRetirar,
-                  fotoBreakerBaseband1Apagado,
-                  fotoEspacioBaseband1Retirada,
-                  fotosConsumoFinal,
-                  ampereConsumoFinal,
-                } : undefined,
-                apagadoBafiSector2: isApagadoBafi ? {
-                  estadoBasebandSector2,
-                  fotoBreakerBaseband2Encendido,
-                  fotoBaseband2Encendida,
-                  confirmadoApagadoRetirar: confirmadoApagadoRetirarS2,
-                  fotoBreakerBaseband2Apagado,
-                  fotoEspacioBaseband2Retirada,
-                  fotosConsumoFinal: fotosConsumoFinalS2,
-                  ampereConsumoFinal: ampereConsumoFinalS2,
-                } : undefined,
-                apagadoBafiSector3: isApagadoBafi ? {
-                  estadoBasebandSector3,
-                  fotoBreakerBaseband3Encendido,
-                  fotoBaseband3Encendida,
-                  confirmadoApagadoRetirar: confirmadoApagadoRetirarS3,
-                  fotoBreakerBaseband3Apagado,
-                  fotoEspacioBaseband3Retirada,
-                  fotosConsumoFinal: fotosConsumoFinalS3,
-                  ampereConsumoFinal: ampereConsumoFinalS3,
-                } : undefined,
-                apagadoAntenaSector1: isApagadoBafi ? {
-                  estadoAntenaSector1,
-                  fotoBreakerAntenaS1Encendido,
-                  seApagaraAntenaS1,
-                  fotoBreakerAntenaS1Apagado,
-                  fotosConsumoFinal: fotosConsumoFinalAntenaS1,
-                  ampereConsumoFinal: ampereConsumoFinalAntenaS1,
-                } : undefined,
-                apagadoAntenaSector2: isApagadoBafi ? {
-                  estadoAntenaSector2,
-                  fotoBreakerAntenaS2Encendido,
-                  seApagaraAntenaS2,
-                  fotoBreakerAntenaS2Apagado,
-                  fotosConsumoFinal: fotosConsumoFinalAntenaS2,
-                  ampereConsumoFinal: ampereConsumoFinalAntenaS2,
-                } : undefined,
-                apagadoAntenaSector3: isApagadoBafi ? {
-                  estadoAntenaSector3,
-                  fotoBreakerAntenaS3Encendido,
-                  seApagaraAntenaS3,
-                  fotoBreakerAntenaS3Apagado,
-                  fotosConsumoFinal: fotosConsumoFinalAntenaS3,
-                  ampereConsumoFinal: ampereConsumoFinalAntenaS3,
-                } : undefined,
-                alarmasExternas: !isIloq ? {
-                  tecnologiaAlarmas,
-                  fotoAlarmasOVP,
-                  fotoAlarmasEquipos,
-                  migraranTecnologia,
-                  fotoAlarmasMigradas,
-                  fotoAlarmasFinalesOVP,
-                  implementaranAlarmas,
-                  motivosNoImplementacion,
-                  fotoNoImplementacion,
-                  tecnologiaImplementacion,
-                  fotoAlarmasImplementadas,
-                } : undefined,
-                evidenciaSalida: !isIloq ? {
-                  fotoRectificador,
-                  fotoContenedor1,
-                  fotoContenedor2,
-                  fotoSitio1,
-                  fotoSitio2,
-                  fotoEstructuraSalida,
-                } : undefined,
-              });
-              context?.updateSite(site.id, {
-                estadoExcel: 'Ejecutado'
-              });
-              navigation.goBack();
+              const runUploadAndFinalize = async () => {
+                isFinalizingRef.current = true;
+                setUploadVisible(true);
+                setUploadProgress(5);
+                setUploadStatus('Estableciendo conexión con la base de datos local...');
+
+                // 1. Recopilar todas las fotos locales para subida
+                const localPhotosToUpload: { key: string; uri: string; index?: number }[] = [];
+
+                const addLocal = (key: string, uri: any, index?: number) => {
+                  if (typeof uri === 'string' && uri.trim() && !uri.startsWith('http://') && !uri.startsWith('https://')) {
+                    localPhotosToUpload.push({ key, uri, index });
+                  }
+                };
+
+                // Hallazgos
+                fotosRef.current.forEach((uri, idx) => addLocal('fotos', uri, idx));
+                
+                // Datos Generales
+                addLocal('fotoEstructura', fotoEstructuraRef.current);
+                addLocal('fotoFueraContenedor', fotoFueraContenedorRef.current);
+                addLocal('fotoMedidor', fotoMedidorRef.current);
+                addLocal('fotoSectorMedidor', fotoSectorMedidorRef.current);
+                addLocal('fotoDisplayRectificador', fotoDisplayRectificadorRef.current);
+                fotosEmpalmeRef.current.forEach((uri, idx) => addLocal('fotosEmpalme', uri, idx));
+                fotosGeneralesSitioRef.current.forEach((uri, idx) => addLocal('fotosGeneralesSitio', uri, idx));
+                fotosInteriorContenedorRef.current.forEach((uri, idx) => addLocal('fotosInteriorContenedor', uri, idx));
+
+                // Apagado 3G
+                addLocal('fotoEquipo3GEncendido', fotoEquipo3GEncendidoRef.current);
+                addLocal('fotoBreaker3GEncendido', fotoBreaker3GEncendidoRef.current);
+                addLocal('fotoBreaker3GApagado', fotoBreaker3GApagadoRef.current);
+                addLocal('fotoEquipo3GApagado', fotoEquipo3GApagadoRef.current);
+                addLocal('fotoEspacioRetirado', fotoEspacioRetiradoRef.current);
+                addLocal('fotoRRUEncendido', fotoRRUEncendidoRef.current);
+                addLocal('fotoRRUApagado', fotoRRUApagadoRef.current);
+
+                // BAFI S1
+                addLocal('fotoBreakerBaseband1Encendido', fotoBreakerBaseband1EncendidoRef.current);
+                addLocal('fotoBaseband1Encendida', fotoBaseband1EncendidaRef.current);
+                addLocal('fotoBreakerBaseband1Apagado', fotoBreakerBaseband1ApagadoRef.current);
+                addLocal('fotoEspacioBaseband1Retirada', fotoEspacioBaseband1RetiradaRef.current);
+                addLocal('fotoConsumoInicialCc1', fotoConsumoInicialCc1Ref.current);
+                addLocal('fotoConsumoFinalCc1', fotoConsumoFinalCc1Ref.current);
+                fotosConsumoFinalRef.current.forEach((uri, idx) => addLocal('fotosConsumoFinal', uri, idx));
+
+                // BAFI S2
+                addLocal('fotoBreakerBaseband2Encendido', fotoBreakerBaseband2EncendidoRef.current);
+                addLocal('fotoBaseband2Encendida', fotoBaseband2EncendidaRef.current);
+                addLocal('fotoBreakerBaseband2Apagado', fotoBreakerBaseband2ApagadoRef.current);
+                addLocal('fotoEspacioBaseband2Retirada', fotoEspacioBaseband2RetiradaRef.current);
+                addLocal('fotoConsumoInicialCc2', fotoConsumoInicialCc2Ref.current);
+                addLocal('fotoConsumoFinalCc2', fotoConsumoFinalCc2Ref.current);
+                fotosConsumoFinalS2Ref.current.forEach((uri, idx) => addLocal('fotosConsumoFinalS2', uri, idx));
+
+                // BAFI S3
+                addLocal('fotoBreakerBaseband3Encendido', fotoBreakerBaseband3EncendidoRef.current);
+                addLocal('fotoBaseband3Encendida', fotoBaseband3EncendidaRef.current);
+                addLocal('fotoBreakerBaseband3Apagado', fotoBreakerBaseband3ApagadoRef.current);
+                addLocal('fotoEspacioBaseband3Retirada', fotoEspacioBaseband3RetiradaRef.current);
+                addLocal('fotoConsumoInicialCc3', fotoConsumoInicialCc3Ref.current);
+                addLocal('fotoConsumoFinalCc3', fotoConsumoFinalCc3Ref.current);
+                fotosConsumoFinalS3Ref.current.forEach((uri, idx) => addLocal('fotosConsumoFinalS3', uri, idx));
+
+                // Antenas
+                addLocal('fotoBreakerAntenaS1Encendido', fotoBreakerAntenaS1EncendidoRef.current);
+                addLocal('fotoConsumoInicialCcAntenaS1', fotoConsumoInicialCcAntenaS1Ref.current);
+                addLocal('fotoBreakerAntenaS1Apagado', fotoBreakerAntenaS1ApagadoRef.current);
+                addLocal('fotoConsumoFinalCcAntenaS1', fotoConsumoFinalCcAntenaS1Ref.current);
+                fotosConsumoFinalAntenaS1Ref.current.forEach((uri, idx) => addLocal('fotosConsumoFinalAntenaS1', uri, idx));
+
+                addLocal('fotoBreakerAntenaS2Encendido', fotoBreakerAntenaS2EncendidoRef.current);
+                addLocal('fotoConsumoInicialCcAntenaS2', fotoConsumoInicialCcAntenaS2Ref.current);
+                addLocal('fotoBreakerAntenaS2Apagado', fotoBreakerAntenaS2ApagadoRef.current);
+                addLocal('fotoConsumoFinalCcAntenaS2', fotoConsumoFinalCcAntenaS2Ref.current);
+                fotosConsumoFinalAntenaS2Ref.current.forEach((uri, idx) => addLocal('fotosConsumoFinalAntenaS2', uri, idx));
+
+                addLocal('fotoBreakerAntenaS3Encendido', fotoBreakerAntenaS3EncendidoRef.current);
+                addLocal('fotoConsumoInicialCcAntenaS3', fotoConsumoInicialCcAntenaS3Ref.current);
+                addLocal('fotoBreakerAntenaS3Apagado', fotoBreakerAntenaS3ApagadoRef.current);
+                addLocal('fotoConsumoFinalCcAntenaS3', fotoConsumoFinalCcAntenaS3Ref.current);
+                fotosConsumoFinalAntenaS3Ref.current.forEach((uri, idx) => addLocal('fotosConsumoFinalAntenaS3', uri, idx));
+
+                // Cambio Chapa
+                addLocal('fotoChapaAnterior', fotoChapaAnteriorRef.current);
+                addLocal('fotoNuevaChapa', fotoNuevaChapaRef.current);
+                addLocal('fotoLlaveProgramacion', fotoLlaveProgramacionRef.current);
+                addLocal('fotoPuertaCerrada', fotoPuertaCerradaRef.current);
+
+                // Evidencia Salida
+                addLocal('fotoRectificador', fotoRectificadorRef.current);
+                addLocal('fotoContenedor1', fotoContenedor1Ref.current);
+                addLocal('fotoContenedor2', fotoContenedor2Ref.current);
+                addLocal('fotoSitio1', fotoSitio1Ref.current);
+                addLocal('fotoSitio2', fotoSitio2Ref.current);
+                addLocal('fotoEstructuraSalida', fotoEstructuraSalidaRef.current);
+                fotosConsumoFinalCaEvidenciaRef.current.forEach((uri, idx) => addLocal('fotosConsumoFinalCaEvidencia', uri, idx));
+                addLocal('fotoConsumoFinalCcRectificador', fotoConsumoFinalCcRectificadorRef.current);
+
+                // Alarmas Externas
+                addLocal('fotoAlarmasOVP', fotoAlarmasOVPRef.current);
+                addLocal('fotoAlarmasEquipos', fotoAlarmasEquiposRef.current);
+                addLocal('fotoAlarmasMigradas', fotoAlarmasMigradasRef.current);
+                addLocal('fotoAlarmasFinalesOVP', fotoAlarmasFinalesOVPRef.current);
+                addLocal('fotoNoImplementacion', fotoNoImplementacionRef.current);
+                addLocal('fotoAlarmasImplementadas', fotoAlarmasImplementadasRef.current);
+
+                // Variables de mapeo para re-escribir los estados de fotos con URLs públicas
+                const finalFotos = [...fotosRef.current];
+                const finalFotosEmpalme = [...fotosEmpalmeRef.current];
+                const finalFotosConsumoFinalCaEvidencia = [...fotosConsumoFinalCaEvidenciaRef.current];
+                let finalFotoConsumoFinalCcRectificador = fotoConsumoFinalCcRectificadorRef.current;
+                const finalFotosGeneralesSitio = [...fotosGeneralesSitioRef.current];
+                const finalFotosInteriorContenedor = [...fotosInteriorContenedorRef.current];
+                const finalFotosConsumoFinal = [...fotosConsumoFinalRef.current];
+                const finalFotosConsumoFinalS2 = [...fotosConsumoFinalS2Ref.current];
+                const finalFotosConsumoFinalS3 = [...fotosConsumoFinalS3Ref.current];
+                const finalFotosConsumoFinalAntenaS1 = [...fotosConsumoFinalAntenaS1Ref.current];
+                const finalFotosConsumoFinalAntenaS2 = [...fotosConsumoFinalAntenaS2Ref.current];
+                const finalFotosConsumoFinalAntenaS3 = [...fotosConsumoFinalAntenaS3Ref.current];
+
+                let finalFotoEstructura = fotoEstructuraRef.current;
+                let finalFotoFueraContenedor = fotoFueraContenedorRef.current;
+                let finalFotoMedidor = fotoMedidorRef.current;
+                let finalFotoSectorMedidor = fotoSectorMedidorRef.current;
+                let finalFotoDisplayRectificador = fotoDisplayRectificadorRef.current;
+                let finalFotoEquipo3GEncendido = fotoEquipo3GEncendidoRef.current;
+                let finalFotoBreaker3GEncendido = fotoBreaker3GEncendidoRef.current;
+                let finalFotoBreaker3GApagado = fotoBreaker3GApagadoRef.current;
+                let finalFotoEquipo3GApagado = fotoEquipo3GApagadoRef.current;
+                let finalFotoEspacioRetirado = fotoEspacioRetiradoRef.current;
+                let finalFotoRRUEncendido = fotoRRUEncendidoRef.current;
+                let finalFotoRRUApagado = fotoRRUApagadoRef.current;
+                let finalFotoBreakerBaseband1Encendido = fotoBreakerBaseband1EncendidoRef.current;
+                let finalFotoBaseband1Encendida = fotoBaseband1EncendidaRef.current;
+                let finalFotoBreakerBaseband1Apagado = fotoBreakerBaseband1ApagadoRef.current;
+                let finalFotoEspacioBaseband1Retirada = fotoEspacioBaseband1RetiradaRef.current;
+                let finalFotoConsumoInicialCc1 = fotoConsumoInicialCc1Ref.current;
+                let finalFotoConsumoFinalCc1 = fotoConsumoFinalCc1Ref.current;
+                let finalFotoBreakerBaseband2Encendido = fotoBreakerBaseband2EncendidoRef.current;
+                let finalFotoBaseband2Encendida = fotoBaseband2EncendidaRef.current;
+                let finalFotoBreakerBaseband2Apagado = fotoBreakerBaseband2ApagadoRef.current;
+                let finalFotoEspacioBaseband2Retirada = fotoEspacioBaseband2RetiradaRef.current;
+                let finalFotoConsumoInicialCc2 = fotoConsumoInicialCc2Ref.current;
+                let finalFotoConsumoFinalCc2 = fotoConsumoFinalCc2Ref.current;
+                let finalFotoBreakerBaseband3Encendido = fotoBreakerBaseband3EncendidoRef.current;
+                let finalFotoBaseband3Encendida = fotoBaseband3EncendidaRef.current;
+                let finalFotoBreakerBaseband3Apagado = fotoBreakerBaseband3ApagadoRef.current;
+                let finalFotoEspacioBaseband3Retirada = fotoEspacioBaseband3RetiradaRef.current;
+                let finalFotoConsumoInicialCc3 = fotoConsumoInicialCc3Ref.current;
+                let finalFotoConsumoFinalCc3 = fotoConsumoFinalCc3Ref.current;
+                let finalFotoBreakerAntenaS1Encendido = fotoBreakerAntenaS1EncendidoRef.current;
+                let finalFotoConsumoInicialCcAntenaS1 = fotoConsumoInicialCcAntenaS1Ref.current;
+                let finalFotoBreakerAntenaS1Apagado = fotoBreakerAntenaS1ApagadoRef.current;
+                let finalFotoConsumoFinalCcAntenaS1 = fotoConsumoFinalCcAntenaS1Ref.current;
+
+                let finalFotoBreakerAntenaS2Encendido = fotoBreakerAntenaS2EncendidoRef.current;
+                let finalFotoConsumoInicialCcAntenaS2 = fotoConsumoInicialCcAntenaS2Ref.current;
+                let finalFotoBreakerAntenaS2Apagado = fotoBreakerAntenaS2ApagadoRef.current;
+                let finalFotoConsumoFinalCcAntenaS2 = fotoConsumoFinalCcAntenaS2Ref.current;
+
+                let finalFotoBreakerAntenaS3Encendido = fotoBreakerAntenaS3EncendidoRef.current;
+                let finalFotoConsumoInicialCcAntenaS3 = fotoConsumoInicialCcAntenaS3Ref.current;
+                let finalFotoBreakerAntenaS3Apagado = fotoBreakerAntenaS3ApagadoRef.current;
+                let finalFotoConsumoFinalCcAntenaS3 = fotoConsumoFinalCcAntenaS3Ref.current;
+                let finalFotoChapaAnterior = fotoChapaAnteriorRef.current;
+                let finalFotoNuevaChapa = fotoNuevaChapaRef.current;
+                let finalFotoLlaveProgramacion = fotoLlaveProgramacionRef.current;
+                let finalFotoPuertaCerrada = fotoPuertaCerradaRef.current;
+                let finalFotoRectificador = fotoRectificadorRef.current;
+                let finalFotoContenedor1 = fotoContenedor1Ref.current;
+                let finalFotoContenedor2 = fotoContenedor2Ref.current;
+                let finalFotoSitio1 = fotoSitio1Ref.current;
+                let finalFotoSitio2 = fotoSitio2Ref.current;
+                let finalFotoEstructuraSalida = fotoEstructuraSalidaRef.current;
+
+                let finalFotoAlarmasOVP = fotoAlarmasOVPRef.current;
+                let finalFotoAlarmasEquipos = fotoAlarmasEquiposRef.current;
+                let finalFotoAlarmasMigradas = fotoAlarmasMigradasRef.current;
+                let finalFotoAlarmasFinalesOVP = fotoAlarmasFinalesOVPRef.current;
+                let finalFotoNoImplementacion = fotoNoImplementacionRef.current;
+                let finalFotoAlarmasImplementadas = fotoAlarmasImplementadasRef.current;
+
+                // 2. Subir las fotos una a una actualizando el progreso
+                const totalPhotos = localPhotosToUpload.length;
+                let uploadedCount = 0;
+
+                setUploadProgress(15);
+                setUploadStatus(`Analizando ${totalPhotos} fotos locales para subir...`);
+                await new Promise(resolve => setTimeout(resolve, 400));
+
+                if (context?.isApiConnected && totalPhotos > 0) {
+                  for (const photo of localPhotosToUpload) {
+                    uploadedCount++;
+                    setUploadStatus(`Subiendo foto ${uploadedCount} de ${totalPhotos} a la Mac...`);
+                    
+                    try {
+                      const webUrl = await uploadPhotoApi(photo.uri);
+                      
+                      // Asignar al clon correspondiente
+                      if (photo.key === 'fotos' && photo.index !== undefined) finalFotos[photo.index] = webUrl;
+                      else if (photo.key === 'fotosEmpalme' && photo.index !== undefined) finalFotosEmpalme[photo.index] = webUrl;
+                      else if (photo.key === 'fotosGeneralesSitio' && photo.index !== undefined) finalFotosGeneralesSitio[photo.index] = webUrl;
+                      else if (photo.key === 'fotosInteriorContenedor' && photo.index !== undefined) finalFotosInteriorContenedor[photo.index] = webUrl;
+                      else if (photo.key === 'fotosConsumoFinal' && photo.index !== undefined) finalFotosConsumoFinal[photo.index] = webUrl;
+                      else if (photo.key === 'fotosConsumoFinalS2' && photo.index !== undefined) finalFotosConsumoFinalS2[photo.index] = webUrl;
+                      else if (photo.key === 'fotosConsumoFinalS3' && photo.index !== undefined) finalFotosConsumoFinalS3[photo.index] = webUrl;
+                      else if (photo.key === 'fotosConsumoFinalAntenaS1' && photo.index !== undefined) finalFotosConsumoFinalAntenaS1[photo.index] = webUrl;
+                      else if (photo.key === 'fotosConsumoFinalAntenaS2' && photo.index !== undefined) finalFotosConsumoFinalAntenaS2[photo.index] = webUrl;
+                      else if (photo.key === 'fotosConsumoFinalAntenaS3' && photo.index !== undefined) finalFotosConsumoFinalAntenaS3[photo.index] = webUrl;
+                      
+                      else if (photo.key === 'fotoEstructura') finalFotoEstructura = webUrl;
+                      else if (photo.key === 'fotoFueraContenedor') finalFotoFueraContenedor = webUrl;
+                      else if (photo.key === 'fotoMedidor') finalFotoMedidor = webUrl;
+                      else if (photo.key === 'fotoSectorMedidor') finalFotoSectorMedidor = webUrl;
+                      else if (photo.key === 'fotoDisplayRectificador') finalFotoDisplayRectificador = webUrl;
+                      else if (photo.key === 'fotoEquipo3GEncendido') finalFotoEquipo3GEncendido = webUrl;
+                      else if (photo.key === 'fotoBreaker3GEncendido') finalFotoBreaker3GEncendido = webUrl;
+                      else if (photo.key === 'fotoBreaker3GApagado') finalFotoBreaker3GApagado = webUrl;
+                      else if (photo.key === 'fotoEquipo3GApagado') finalFotoEquipo3GApagado = webUrl;
+                      else if (photo.key === 'fotoEspacioRetirado') finalFotoEspacioRetirado = webUrl;
+                      else if (photo.key === 'fotoRRUEncendido') finalFotoRRUEncendido = webUrl;
+                      else if (photo.key === 'fotoRRUApagado') finalFotoRRUApagado = webUrl;
+                      else if (photo.key === 'fotoBreakerBaseband1Encendido') finalFotoBreakerBaseband1Encendido = webUrl;
+                      else if (photo.key === 'fotoBaseband1Encendida') finalFotoBaseband1Encendida = webUrl;
+                      else if (photo.key === 'fotoBreakerBaseband1Apagado') finalFotoBreakerBaseband1Apagado = webUrl;
+                      else if (photo.key === 'fotoEspacioBaseband1Retirada') finalFotoEspacioBaseband1Retirada = webUrl;
+                      else if (photo.key === 'fotoConsumoInicialCc1') finalFotoConsumoInicialCc1 = webUrl;
+                      else if (photo.key === 'fotoConsumoFinalCc1') finalFotoConsumoFinalCc1 = webUrl;
+                      else if (photo.key === 'fotoBreakerBaseband2Encendido') finalFotoBreakerBaseband2Encendido = webUrl;
+                      else if (photo.key === 'fotoBaseband2Encendida') finalFotoBaseband2Encendida = webUrl;
+                      else if (photo.key === 'fotoBreakerBaseband2Apagado') finalFotoBreakerBaseband2Apagado = webUrl;
+                      else if (photo.key === 'fotoEspacioBaseband2Retirada') finalFotoEspacioBaseband2Retirada = webUrl;
+                      else if (photo.key === 'fotoConsumoInicialCc2') finalFotoConsumoInicialCc2 = webUrl;
+                      else if (photo.key === 'fotoConsumoFinalCc2') finalFotoConsumoFinalCc2 = webUrl;
+                      else if (photo.key === 'fotoBreakerBaseband3Encendido') finalFotoBreakerBaseband3Encendido = webUrl;
+                      else if (photo.key === 'fotoBaseband3Encendida') finalFotoBaseband3Encendida = webUrl;
+                      else if (photo.key === 'fotoBreakerBaseband3Apagado') finalFotoBreakerBaseband3Apagado = webUrl;
+                      else if (photo.key === 'fotoEspacioBaseband3Retirada') finalFotoEspacioBaseband3Retirada = webUrl;
+                      else if (photo.key === 'fotoConsumoInicialCc3') finalFotoConsumoInicialCc3 = webUrl;
+                      else if (photo.key === 'fotoConsumoFinalCc3') finalFotoConsumoFinalCc3 = webUrl;
+                      else if (photo.key === 'fotoBreakerAntenaS1Encendido') finalFotoBreakerAntenaS1Encendido = webUrl;
+                      else if (photo.key === 'fotoConsumoInicialCcAntenaS1') finalFotoConsumoInicialCcAntenaS1 = webUrl;
+                      else if (photo.key === 'fotoBreakerAntenaS1Apagado') finalFotoBreakerAntenaS1Apagado = webUrl;
+                      else if (photo.key === 'fotoConsumoFinalCcAntenaS1') finalFotoConsumoFinalCcAntenaS1 = webUrl;
+
+                      else if (photo.key === 'fotoBreakerAntenaS2Encendido') finalFotoBreakerAntenaS2Encendido = webUrl;
+                      else if (photo.key === 'fotoConsumoInicialCcAntenaS2') finalFotoConsumoInicialCcAntenaS2 = webUrl;
+                      else if (photo.key === 'fotoBreakerAntenaS2Apagado') finalFotoBreakerAntenaS2Apagado = webUrl;
+                      else if (photo.key === 'fotoConsumoFinalCcAntenaS2') finalFotoConsumoFinalCcAntenaS2 = webUrl;
+
+                      else if (photo.key === 'fotoBreakerAntenaS3Encendido') finalFotoBreakerAntenaS3Encendido = webUrl;
+                      else if (photo.key === 'fotoConsumoInicialCcAntenaS3') finalFotoConsumoInicialCcAntenaS3 = webUrl;
+                      else if (photo.key === 'fotoBreakerAntenaS3Apagado') finalFotoBreakerAntenaS3Apagado = webUrl;
+                      else if (photo.key === 'fotoConsumoFinalCcAntenaS3') finalFotoConsumoFinalCcAntenaS3 = webUrl;
+                      else if (photo.key === 'fotoChapaAnterior') finalFotoChapaAnterior = webUrl;
+                      else if (photo.key === 'fotoNuevaChapa') finalFotoNuevaChapa = webUrl;
+                      else if (photo.key === 'fotoLlaveProgramacion') finalFotoLlaveProgramacion = webUrl;
+                      else if (photo.key === 'fotoPuertaCerrada') finalFotoPuertaCerrada = webUrl;
+                      else if (photo.key === 'fotoRectificador') finalFotoRectificador = webUrl;
+                      else if (photo.key === 'fotoContenedor1') finalFotoContenedor1 = webUrl;
+                      else if (photo.key === 'fotoContenedor2') finalFotoContenedor2 = webUrl;
+                      else if (photo.key === 'fotoSitio1') finalFotoSitio1 = webUrl;
+                      else if (photo.key === 'fotoSitio2') finalFotoSitio2 = webUrl;
+                      else if (photo.key === 'fotoEstructuraSalida') finalFotoEstructuraSalida = webUrl;
+                      else if (photo.key === 'fotosConsumoFinalCaEvidencia' && photo.index !== undefined) finalFotosConsumoFinalCaEvidencia[photo.index] = webUrl;
+                      else if (photo.key === 'fotoConsumoFinalCcRectificador') finalFotoConsumoFinalCcRectificador = webUrl;
+                      else if (photo.key === 'fotoAlarmasOVP') finalFotoAlarmasOVP = webUrl;
+                      else if (photo.key === 'fotoAlarmasEquipos') finalFotoAlarmasEquipos = webUrl;
+                      else if (photo.key === 'fotoAlarmasMigradas') finalFotoAlarmasMigradas = webUrl;
+                      else if (photo.key === 'fotoAlarmasFinalesOVP') finalFotoAlarmasFinalesOVP = webUrl;
+                      else if (photo.key === 'fotoNoImplementacion') finalFotoNoImplementacion = webUrl;
+                      else if (photo.key === 'fotoAlarmasImplementadas') finalFotoAlarmasImplementadas = webUrl;
+
+                    } catch (err) {
+                      console.error(`Error subiendo foto ${photo.uri}:`, err);
+                    }
+                    
+                    const progressPercent = 15 + (70 * (uploadedCount / totalPhotos));
+                    setUploadProgress(progressPercent);
+                  }
+                } else if (!context?.isApiConnected) {
+                  setUploadProgress(50);
+                  setUploadStatus('API local no disponible. Guardando reporte en modo offline local...');
+                  await new Promise(resolve => setTimeout(resolve, 800));
+                }
+
+                // 3. Subir información estructurada a la BD local
+                setUploadProgress(85);
+                setUploadStatus('Sincronizando información técnica en PostgreSQL...');
+                const nowStr = new Date().toISOString();
+
+                await context?.updatePlanning(planning.id, {
+                  status: 'Ejecutado',
+                  endTime: nowStr,
+                  hallazgos: {
+                    observaciones: observaciones,
+                    fotos: finalFotos,
+                  },
+                  datosGenerales: {
+                    tipoEstructura,
+                    tipoContenedor,
+                    tipoEmpalme,
+                    fotosEmpalme: finalFotosEmpalme,
+                    capacidadProteccion,
+                    fotoMedidor: finalFotoMedidor,
+                    fotoSectorMedidor: finalFotoSectorMedidor,
+                    numeroMedidor,
+                    lecturaConsumo,
+                    fotoEstructura: finalFotoEstructura,
+                    fotoFueraContenedor: finalFotoFueraContenedor,
+                    fotosGeneralesSitio: finalFotosGeneralesSitio,
+                    fotosInteriorContenedor: finalFotosInteriorContenedor,
+                    ampereEmpalme: ampereEmpalmeRef.current,
+                    fotoDisplayRectificador: finalFotoDisplayRectificador,
+                    ampereDisplayRectificador,
+                  },
+                  cambioChapa: isIloq ? {
+                    tipoChapa,
+                    nroSerie,
+                    estadoInicial: estadoInicialChapa,
+                    fotoChapaAnterior: finalFotoChapaAnterior,
+                    fotoNuevaChapa: finalFotoNuevaChapa,
+                    fotoLlaveProgramacion: finalFotoLlaveProgramacion,
+                    fotoPuertaCerrada: finalFotoPuertaCerrada,
+                    estadoFinal: estadoFinalChapa,
+                    justificacion: justificacionChapa,
+                  } : undefined,
+                  apagado3G: (!isIloq && !isApagadoBafi) ? {
+                    estado3G,
+                    seApagara3G,
+                    estadoRRU,
+                    seApagaraRRU,
+                    fotoEquipo3GEncendido: finalFotoEquipo3GEncendido,
+                    fotoBreaker3GEncendido: finalFotoBreaker3GEncendido,
+                    fotoBreaker3GApagado: finalFotoBreaker3GApagado,
+                    fotoEquipo3GApagado: finalFotoEquipo3GApagado,
+                    fotoEspacioRetirado: finalFotoEspacioRetirado,
+                    seRetirara3G,
+                    fotoRRUEncendido: finalFotoRRUEncendido,
+                    fotoRRUApagado: finalFotoRRUApagado,
+                    ampere3GEncendido,
+                  } : undefined,
+                  apagadoBafiSector1: isApagadoBafi ? {
+                    estadoBasebandSector1,
+                    fotoBreakerBaseband1Encendido: finalFotoBreakerBaseband1Encendido,
+                    fotoBaseband1Encendida: finalFotoBaseband1Encendida,
+                    confirmadoApagadoRetirar,
+                    fotoBreakerBaseband1Apagado: finalFotoBreakerBaseband1Apagado,
+                    fotoEspacioBaseband1Retirada: finalFotoEspacioBaseband1Retirada,
+                    fotosConsumoFinal: finalFotosConsumoFinal,
+                    ampereConsumoFinal,
+                    fotoConsumoInicialCc: finalFotoConsumoInicialCc1,
+                    ampereConsumoInicialCc: ampereConsumoInicialCc1,
+                    fotoConsumoFinalCc: finalFotoConsumoFinalCc1,
+                    ampereConsumoFinalCc: ampereConsumoFinalCc1,
+                  } : undefined,
+                  apagadoBafiSector2: isApagadoBafi ? {
+                    estadoBasebandSector2,
+                    fotoBreakerBaseband2Encendido: finalFotoBreakerBaseband2Encendido,
+                    fotoBaseband2Encendida: finalFotoBaseband2Encendida,
+                    confirmadoApagadoRetirar: confirmadoApagadoRetirarS2,
+                    fotoBreakerBaseband2Apagado: finalFotoBreakerBaseband2Apagado,
+                    fotoEspacioBaseband2Retirada: finalFotoEspacioBaseband2Retirada,
+                    fotosConsumoFinal: finalFotosConsumoFinalS2,
+                    ampereConsumoFinal: ampereConsumoFinalS2,
+                    fotoConsumoInicialCc: finalFotoConsumoInicialCc2,
+                    ampereConsumoInicialCc: ampereConsumoInicialCc2,
+                    fotoConsumoFinalCc: finalFotoConsumoFinalCc2,
+                    ampereConsumoFinalCc: ampereConsumoFinalCc2,
+                  } : undefined,
+                  apagadoBafiSector3: isApagadoBafi ? {
+                    estadoBasebandSector3,
+                    fotoBreakerBaseband3Encendido: finalFotoBreakerBaseband3Encendido,
+                    fotoBaseband3Encendida: finalFotoBaseband3Encendida,
+                    confirmadoApagadoRetirar: confirmadoApagadoRetirarS3,
+                    fotoBreakerBaseband3Apagado: finalFotoBreakerBaseband3Apagado,
+                    fotoEspacioBaseband3Retirada: finalFotoEspacioBaseband3Retirada,
+                    fotosConsumoFinal: finalFotosConsumoFinalS3,
+                    ampereConsumoFinal: ampereConsumoFinalS3,
+                    fotoConsumoInicialCc: finalFotoConsumoInicialCc3,
+                    ampereConsumoInicialCc: ampereConsumoInicialCc3,
+                    fotoConsumoFinalCc: finalFotoConsumoFinalCc3,
+                    ampereConsumoFinalCc: ampereConsumoFinalCc3,
+                  } : undefined,
+                   apagadoAntenaSector1: isApagadoBafi ? {
+                    estadoAntenaSector1,
+                    fotoBreakerAntenaS1Encendido: finalFotoBreakerAntenaS1Encendido,
+                    seApagaraAntenaS1,
+                    fotoBreakerAntenaS1Apagado: finalFotoBreakerAntenaS1Apagado,
+                    fotosConsumoFinal: finalFotosConsumoFinalAntenaS1,
+                    ampereConsumoFinal: ampereConsumoFinalAntenaS1,
+                    fotoConsumoInicialCc: finalFotoConsumoInicialCcAntenaS1,
+                    fotoConsumoFinalCc: finalFotoConsumoFinalCcAntenaS1,
+                    textoCompartida5G: textoCompartida5GAntenaS1,
+                    confirmadoApagadoAntena: confirmadoApagadoAntenaS1,
+                  } : undefined,
+                  apagadoAntenaSector2: isApagadoBafi ? {
+                    estadoAntenaSector2,
+                    fotoBreakerAntenaS2Encendido: finalFotoBreakerAntenaS2Encendido,
+                    seApagaraAntenaS2,
+                    fotoBreakerAntenaS2Apagado: finalFotoBreakerAntenaS2Apagado,
+                    fotosConsumoFinal: finalFotosConsumoFinalAntenaS2,
+                    ampereConsumoFinal: ampereConsumoFinalAntenaS2,
+                    fotoConsumoInicialCc: finalFotoConsumoInicialCcAntenaS2,
+                    fotoConsumoFinalCc: finalFotoConsumoFinalCcAntenaS2,
+                    textoCompartida5G: textoCompartida5GAntenaS2,
+                    confirmadoApagadoAntena: confirmadoApagadoAntenaS2,
+                  } : undefined,
+                  apagadoAntenaSector3: isApagadoBafi ? {
+                    estadoAntenaSector3,
+                    fotoBreakerAntenaS3Encendido: finalFotoBreakerAntenaS3Encendido,
+                    seApagaraAntenaS3,
+                    fotoBreakerAntenaS3Apagado: finalFotoBreakerAntenaS3Apagado,
+                    fotosConsumoFinal: finalFotosConsumoFinalAntenaS3,
+                    ampereConsumoFinal: ampereConsumoFinalAntenaS3,
+                    fotoConsumoInicialCc: finalFotoConsumoInicialCcAntenaS3,
+                    fotoConsumoFinalCc: finalFotoConsumoFinalCcAntenaS3,
+                    textoCompartida5G: textoCompartida5GAntenaS3,
+                    confirmadoApagadoAntena: confirmadoApagadoAntenaS3,
+                  } : undefined,
+                  alarmasExternas: !isIloq ? {
+                    tecnologiaAlarmas,
+                    fotoAlarmasOVP: finalFotoAlarmasOVP,
+                    fotoAlarmasEquipos: finalFotoAlarmasEquipos,
+                    migraranTecnologia,
+                    fotoAlarmasMigradas: finalFotoAlarmasMigradas,
+                    fotoAlarmasFinalesOVP: finalFotoAlarmasFinalesOVP,
+                    implementaranAlarmas,
+                    motivosNoImplementacion,
+                    fotoNoImplementacion: finalFotoNoImplementacion,
+                    tecnologiaImplementacion,
+                    fotoAlarmasImplementadas: finalFotoAlarmasImplementadas,
+                  } : undefined,
+                  evidenciaSalida: !isIloq ? {
+                    fotoRectificador: finalFotoRectificador,
+                    fotoContenedor1: finalFotoContenedor1,
+                    fotoContenedor2: finalFotoContenedor2,
+                    fotoSitio1: finalFotoSitio1,
+                    fotoSitio2: finalFotoSitio2,
+                    fotoEstructuraSalida: finalFotoEstructuraSalida,
+                    fotosConsumoFinalCaEvidencia: finalFotosConsumoFinalCaEvidencia,
+                    ampereConsumoFinalCaEvidencia: ampereConsumoFinalCaEvidencia,
+                    fotoConsumoFinalCcRectificador: finalFotoConsumoFinalCcRectificador,
+                    ampereDisplayRectificadorFinal: ampereDisplayRectificadorFinal,
+                  } : undefined,
+                });
+
+                await context?.updateSite(site.id, {
+                  estadoExcel: 'Ejecutado'
+                });
+
+                // 4. Verificar integridad de subida en la API (si está online)
+                if (context?.isApiConnected) {
+                  setUploadProgress(92);
+                  setUploadStatus('Verificando integridad de datos en el servidor...');
+                  try {
+                    const serverData = await getPlanningDetail(planning.id);
+                    
+                    // Comprobar que el estado y la fecha de finalización se hayan guardado en PostgreSQL
+                    const isStatusOk = serverData.status === 'Ejecutado';
+                    const isEndTimeOk = !!serverData.end_time;
+                    
+                    if (isStatusOk && isEndTimeOk) {
+                      setUploadProgress(100);
+                      setUploadStatus('¡Verificación exitosa! Datos y fotos resguardados en PostgreSQL.');
+                      await new Promise(resolve => setTimeout(resolve, 1500));
+                    } else {
+                      console.log('Verification failed: mismatch', serverData);
+                      setUploadProgress(100);
+                      setUploadStatus('⚠️ Sincronizado localmente. Verificación parcial en el servidor.');
+                      await new Promise(resolve => setTimeout(resolve, 2500));
+                    }
+                  } catch (verifyErr) {
+                    console.log('Error verifying planning upload:', verifyErr);
+                    setUploadProgress(100);
+                    setUploadStatus('⚠️ Guardado localmente. La verificación del servidor falló o expiró.');
+                    await new Promise(resolve => setTimeout(resolve, 2500));
+                  }
+                } else {
+                  setUploadProgress(100);
+                  setUploadStatus('¡Guardado local completado exitosamente (modo offline)!');
+                  await new Promise(resolve => setTimeout(resolve, 1500));
+                }
+
+                setUploadVisible(false);
+                if (context?.currentUser?.role === 'Trabajador') {
+                  navigation.navigate('MainTabs', { screen: 'Actividad' });
+                } else {
+                  navigation.goBack();
+                }
+
+              };
+
+              runUploadAndFinalize();
             } 
           }
         ]
@@ -2082,7 +3121,7 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
           onPress: () => {
             context?.updatePlanning(planning.id, {
               status: 'En ejecución',
-              endTime: undefined
+              endTime: null
             });
             context?.updateSite(site.id, {
               estadoExcel: 'En ejecución'
@@ -2095,7 +3134,7 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
   };
 
   const calculateDatosProgress = () => {
-    const totalFields = tipoEmpalme === 'Trifásico' ? 17 : 15;
+    const totalFields = tipoEmpalme === 'Trifásico' ? 19 : 17;
     let completedFields = 0;
     if (tipoEstructura) completedFields++;
     if (fotoEstructura) completedFields++;
@@ -2111,6 +3150,8 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
     if (fotoSectorMedidor) completedFields++;
     if (numeroMedidor) completedFields++;
     if (lecturaConsumo) completedFields++;
+    if (fotoDisplayRectificador) completedFields++;
+    if (ampereDisplayRectificador) completedFields++;
     if (tipoEmpalme === 'Monofásico') { if (fotosEmpalme[0]) completedFields++; }
     else if (tipoEmpalme === 'Trifásico') {
       if (fotosEmpalme[0]) completedFields++;
@@ -2136,31 +3177,21 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
   };
 
   const calculateBafiSector1Progress = () => {
-    const isTrifasico = tipoEmpalme === 'Trifásico';
     if (estadoBasebandSector1 === 'Encendido') {
-      const total = isTrifasico ? 10 : 6;
+      const total = 6;
       let completed = 0;
       if (fotoBreakerBaseband1Encendido) completed++;
       if (fotoBaseband1Encendida) completed++;
+      if (fotoConsumoInicialCc1) completed++;
       if (fotoBreakerBaseband1Apagado) completed++;
+      if (fotoConsumoFinalCc1) completed++;
       if (fotoEspacioBaseband1Retirada) completed++;
-      
-      if (isTrifasico) {
-        if (fotosConsumoFinal[0]) completed++;
-        if (fotosConsumoFinal[1]) completed++;
-        if (fotosConsumoFinal[2]) completed++;
-        if (ampereConsumoFinal[0] && ampereConsumoFinal[0] !== '00,00') completed++;
-        if (ampereConsumoFinal[1] && ampereConsumoFinal[1] !== '00,00') completed++;
-        if (ampereConsumoFinal[2] && ampereConsumoFinal[2] !== '00,00') completed++;
-      } else {
-        if (fotosConsumoFinal[0]) completed++;
-        if (ampereConsumoFinal[0] && ampereConsumoFinal[0] !== '00,00') completed++;
-      }
       return Math.round((completed / total) * 100);
     } else if (estadoBasebandSector1 === 'Apagado') {
-      const total = 2;
+      const total = 3;
       let completed = 0;
       if (fotoBreakerBaseband1Apagado) completed++;
+      if (fotoConsumoFinalCc1) completed++;
       if (fotoEspacioBaseband1Retirada) completed++;
       return Math.round((completed / total) * 100);
     } else if (estadoBasebandSector1 === 'N/A') {
@@ -2170,31 +3201,21 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
   };
 
   const calculateBafiSector2Progress = () => {
-    const isTrifasico = tipoEmpalme === 'Trifásico';
     if (estadoBasebandSector2 === 'Encendido') {
-      const total = isTrifasico ? 10 : 6;
+      const total = 6;
       let completed = 0;
       if (fotoBreakerBaseband2Encendido) completed++;
       if (fotoBaseband2Encendida) completed++;
+      if (fotoConsumoInicialCc2) completed++;
       if (fotoBreakerBaseband2Apagado) completed++;
+      if (fotoConsumoFinalCc2) completed++;
       if (fotoEspacioBaseband2Retirada) completed++;
-      
-      if (isTrifasico) {
-        if (fotosConsumoFinalS2[0]) completed++;
-        if (fotosConsumoFinalS2[1]) completed++;
-        if (fotosConsumoFinalS2[2]) completed++;
-        if (ampereConsumoFinalS2[0] && ampereConsumoFinalS2[0] !== '00,00') completed++;
-        if (ampereConsumoFinalS2[1] && ampereConsumoFinalS2[1] !== '00,00') completed++;
-        if (ampereConsumoFinalS2[2] && ampereConsumoFinalS2[2] !== '00,00') completed++;
-      } else {
-        if (fotosConsumoFinalS2[0]) completed++;
-        if (ampereConsumoFinalS2[0] && ampereConsumoFinalS2[0] !== '00,00') completed++;
-      }
       return Math.round((completed / total) * 100);
     } else if (estadoBasebandSector2 === 'Apagado') {
-      const total = 2;
+      const total = 3;
       let completed = 0;
       if (fotoBreakerBaseband2Apagado) completed++;
+      if (fotoConsumoFinalCc2) completed++;
       if (fotoEspacioBaseband2Retirada) completed++;
       return Math.round((completed / total) * 100);
     } else if (estadoBasebandSector2 === 'N/A') {
@@ -2204,31 +3225,21 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
   };
 
   const calculateBafiSector3Progress = () => {
-    const isTrifasico = tipoEmpalme === 'Trifásico';
     if (estadoBasebandSector3 === 'Encendido') {
-      const total = isTrifasico ? 10 : 6;
+      const total = 6;
       let completed = 0;
       if (fotoBreakerBaseband3Encendido) completed++;
       if (fotoBaseband3Encendida) completed++;
+      if (fotoConsumoInicialCc3) completed++;
       if (fotoBreakerBaseband3Apagado) completed++;
+      if (fotoConsumoFinalCc3) completed++;
       if (fotoEspacioBaseband3Retirada) completed++;
-      
-      if (isTrifasico) {
-        if (fotosConsumoFinalS3[0]) completed++;
-        if (fotosConsumoFinalS3[1]) completed++;
-        if (fotosConsumoFinalS3[2]) completed++;
-        if (ampereConsumoFinalS3[0] && ampereConsumoFinalS3[0] !== '00,00') completed++;
-        if (ampereConsumoFinalS3[1] && ampereConsumoFinalS3[1] !== '00,00') completed++;
-        if (ampereConsumoFinalS3[2] && ampereConsumoFinalS3[2] !== '00,00') completed++;
-      } else {
-        if (fotosConsumoFinalS3[0]) completed++;
-        if (ampereConsumoFinalS3[0] && ampereConsumoFinalS3[0] !== '00,00') completed++;
-      }
       return Math.round((completed / total) * 100);
     } else if (estadoBasebandSector3 === 'Apagado') {
-      const total = 2;
+      const total = 3;
       let completed = 0;
       if (fotoBreakerBaseband3Apagado) completed++;
+      if (fotoConsumoFinalCc3) completed++;
       if (fotoEspacioBaseband3Retirada) completed++;
       return Math.round((completed / total) * 100);
     } else if (estadoBasebandSector3 === 'N/A') {
@@ -2238,120 +3249,45 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
   };
 
   const calculateAntenaSector1Progress = () => {
-    const isTrifasico = tipoEmpalme === 'Trifásico';
-    if (estadoAntenaSector1 === 'Encendida') {
-      if (seApagaraAntenaS1 === 'Si') {
-        const total = isTrifasico ? 9 : 5;
-        let completed = 0;
-        if (fotoBreakerAntenaS1Encendido) completed++;
-        if (seApagaraAntenaS1) completed++;
-        if (fotoBreakerAntenaS1Apagado) completed++;
-
-        if (isTrifasico) {
-          if (fotosConsumoFinalAntenaS1[0]) completed++;
-          if (fotosConsumoFinalAntenaS1[1]) completed++;
-          if (fotosConsumoFinalAntenaS1[2]) completed++;
-          if (ampereConsumoFinalAntenaS1[0] && ampereConsumoFinalAntenaS1[0] !== '00,00') completed++;
-          if (ampereConsumoFinalAntenaS1[1] && ampereConsumoFinalAntenaS1[1] !== '00,00') completed++;
-          if (ampereConsumoFinalAntenaS1[2] && ampereConsumoFinalAntenaS1[2] !== '00,00') completed++;
-        } else {
-          if (fotosConsumoFinalAntenaS1[0]) completed++;
-          if (ampereConsumoFinalAntenaS1[0] && ampereConsumoFinalAntenaS1[0] !== '00,00') completed++;
-        }
-        return Math.round((completed / total) * 100);
-      } else {
-        const total = 2;
-        let completed = 0;
-        if (fotoBreakerAntenaS1Encendido) completed++;
-        if (seApagaraAntenaS1) completed++;
-        return Math.round((completed / total) * 100);
-      }
-    } else if (estadoAntenaSector1 === 'Apagada') {
-      const total = 1;
+    if (seApagaraAntenaS1 === 'Si') {
+      const total = 4;
       let completed = 0;
+      if (fotoBreakerAntenaS1Encendido) completed++;
+      if (fotoConsumoInicialCcAntenaS1) completed++;
       if (fotoBreakerAntenaS1Apagado) completed++;
+      if (fotoConsumoFinalCcAntenaS1) completed++;
       return Math.round((completed / total) * 100);
-    } else if (estadoAntenaSector1 === 'N/A') {
+    } else if (seApagaraAntenaS1 === 'No' || seApagaraAntenaS1 === 'N/A') {
       return 100;
     }
     return 0;
   };
 
   const calculateAntenaSector2Progress = () => {
-    const isTrifasico = tipoEmpalme === 'Trifásico';
-    if (estadoAntenaSector2 === 'Encendida') {
-      if (seApagaraAntenaS2 === 'Si') {
-        const total = isTrifasico ? 9 : 5;
-        let completed = 0;
-        if (fotoBreakerAntenaS2Encendido) completed++;
-        if (seApagaraAntenaS2) completed++;
-        if (fotoBreakerAntenaS2Apagado) completed++;
-
-        if (isTrifasico) {
-          if (fotosConsumoFinalAntenaS2[0]) completed++;
-          if (fotosConsumoFinalAntenaS2[1]) completed++;
-          if (fotosConsumoFinalAntenaS2[2]) completed++;
-          if (ampereConsumoFinalAntenaS2[0] && ampereConsumoFinalAntenaS2[0] !== '00,00') completed++;
-          if (ampereConsumoFinalAntenaS2[1] && ampereConsumoFinalAntenaS2[1] !== '00,00') completed++;
-          if (ampereConsumoFinalAntenaS2[2] && ampereConsumoFinalAntenaS2[2] !== '00,00') completed++;
-        } else {
-          if (fotosConsumoFinalAntenaS2[0]) completed++;
-          if (ampereConsumoFinalAntenaS2[0] && ampereConsumoFinalAntenaS2[0] !== '00,00') completed++;
-        }
-        return Math.round((completed / total) * 100);
-      } else {
-        const total = 2;
-        let completed = 0;
-        if (fotoBreakerAntenaS2Encendido) completed++;
-        if (seApagaraAntenaS2) completed++;
-        return Math.round((completed / total) * 100);
-      }
-    } else if (estadoAntenaSector2 === 'Apagada') {
-      const total = 1;
+    if (seApagaraAntenaS2 === 'Si') {
+      const total = 4;
       let completed = 0;
+      if (fotoBreakerAntenaS2Encendido) completed++;
+      if (fotoConsumoInicialCcAntenaS2) completed++;
       if (fotoBreakerAntenaS2Apagado) completed++;
+      if (fotoConsumoFinalCcAntenaS2) completed++;
       return Math.round((completed / total) * 100);
-    } else if (estadoAntenaSector2 === 'N/A') {
+    } else if (seApagaraAntenaS2 === 'No' || seApagaraAntenaS2 === 'N/A') {
       return 100;
     }
     return 0;
   };
 
   const calculateAntenaSector3Progress = () => {
-    const isTrifasico = tipoEmpalme === 'Trifásico';
-    if (estadoAntenaSector3 === 'Encendida') {
-      if (seApagaraAntenaS3 === 'Si') {
-        const total = isTrifasico ? 9 : 5;
-        let completed = 0;
-        if (fotoBreakerAntenaS3Encendido) completed++;
-        if (seApagaraAntenaS3) completed++;
-        if (fotoBreakerAntenaS3Apagado) completed++;
-
-        if (isTrifasico) {
-          if (fotosConsumoFinalAntenaS3[0]) completed++;
-          if (fotosConsumoFinalAntenaS3[1]) completed++;
-          if (fotosConsumoFinalAntenaS3[2]) completed++;
-          if (ampereConsumoFinalAntenaS3[0] && ampereConsumoFinalAntenaS3[0] !== '00,00') completed++;
-          if (ampereConsumoFinalAntenaS3[1] && ampereConsumoFinalAntenaS3[1] !== '00,00') completed++;
-          if (ampereConsumoFinalAntenaS3[2] && ampereConsumoFinalAntenaS3[2] !== '00,00') completed++;
-        } else {
-          if (fotosConsumoFinalAntenaS3[0]) completed++;
-          if (ampereConsumoFinalAntenaS3[0] && ampereConsumoFinalAntenaS3[0] !== '00,00') completed++;
-        }
-        return Math.round((completed / total) * 100);
-      } else {
-        const total = 2;
-        let completed = 0;
-        if (fotoBreakerAntenaS3Encendido) completed++;
-        if (seApagaraAntenaS3) completed++;
-        return Math.round((completed / total) * 100);
-      }
-    } else if (estadoAntenaSector3 === 'Apagada') {
-      const total = 1;
+    if (seApagaraAntenaS3 === 'Si') {
+      const total = 4;
       let completed = 0;
+      if (fotoBreakerAntenaS3Encendido) completed++;
+      if (fotoConsumoInicialCcAntenaS3) completed++;
       if (fotoBreakerAntenaS3Apagado) completed++;
+      if (fotoConsumoFinalCcAntenaS3) completed++;
       return Math.round((completed / total) * 100);
-    } else if (estadoAntenaSector3 === 'N/A') {
+    } else if (seApagaraAntenaS3 === 'No' || seApagaraAntenaS3 === 'N/A') {
       return 100;
     }
     return 0;
@@ -2408,13 +3344,27 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
 
   const calculateEvidenciaSalidaProgress = () => {
     let completed = 0;
-    const total = 6;
+    let total = 6;
     if (fotoRectificador) completed++;
     if (fotoContenedor1) completed++;
     if (fotoContenedor2) completed++;
     if (fotoSitio1) completed++;
     if (fotoSitio2) completed++;
     if (fotoEstructuraSalida) completed++;
+
+    if (tipoEmpalme === 'Monofásico') {
+      total += 1;
+      if (fotosConsumoFinalCaEvidencia && fotosConsumoFinalCaEvidencia[0]) completed++;
+    } else {
+      total += 3;
+      if (fotosConsumoFinalCaEvidencia && fotosConsumoFinalCaEvidencia[0]) completed++;
+      if (fotosConsumoFinalCaEvidencia && fotosConsumoFinalCaEvidencia[1]) completed++;
+      if (fotosConsumoFinalCaEvidencia && fotosConsumoFinalCaEvidencia[2]) completed++;
+    }
+
+    total += 1;
+    if (fotoConsumoFinalCcRectificador) completed++;
+
     return Math.round((completed / total) * 100);
   };
 
@@ -2437,6 +3387,21 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
       return secondProgress === 100;
     }
   };
+
+  const getAmpereEmpalmeFilled = () => {
+    if (tipoEmpalme === 'Monofásico') {
+      return !!(ampereEmpalme[0] && ampereEmpalme[0] !== '00,00' && ampereEmpalme[0].trim() !== '');
+    }
+    if (tipoEmpalme === 'Trifásico') {
+      return !!(
+        ampereEmpalme[0] && ampereEmpalme[0] !== '00,00' && ampereEmpalme[0].trim() !== '' &&
+        ampereEmpalme[1] && ampereEmpalme[1] !== '00,00' && ampereEmpalme[1].trim() !== '' &&
+        ampereEmpalme[2] && ampereEmpalme[2] !== '00,00' && ampereEmpalme[2].trim() !== ''
+      );
+    }
+    return false;
+  };
+  const isAmpereEmpalmeFilled = getAmpereEmpalmeFilled();
 
   const getCurrentFolderProgress = () => {
     if (activeFolder === 'datos') return calculateDatosProgress();
@@ -2661,6 +3626,19 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
         </View>
       </Modal>
 
+      {/* Overlay de descarga de informe desde base de datos */}
+      <Modal visible={isSyncingFromDb} transparent animationType="fade">
+        <View style={styles.processingOverlay}>
+          <View style={[styles.processingCard, { paddingVertical: 32, paddingHorizontal: 28, gap: 16 }]}>
+            <View style={{ width: 64, height: 64, borderRadius: 32, backgroundColor: colors.primary + '20', alignItems: 'center', justifyContent: 'center' }}>
+              <ActivityIndicator size="large" color={colors.primary} />
+            </View>
+            <Text style={[styles.processingTitle, { fontSize: 18 }]}>Cargando Informe</Text>
+            <Text style={[styles.processingSubtitle, { textAlign: 'center', lineHeight: 20 }]}>Descargando información actualizada{`\n`}desde la base de datos...</Text>
+          </View>
+        </View>
+      </Modal>
+
       {/* Modal para ingresar Ampere */}
       <Modal
         visible={showAmpereModal}
@@ -2705,8 +3683,39 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
               <TouchableOpacity 
                 style={[styles.modalBtn, styles.modalBtnConfirm]} 
                 onPress={() => {
-                  if (activeAmpereTarget === 'fotoEquipo3GEncendido') {
+                  if (activeAmpereTarget === 'fotosConsumoFinalCaEvidencia') {
+                    if (activeAmpereIndex !== null) {
+                      const newValues = [...ampereConsumoFinalCaEvidencia];
+                      newValues[activeAmpereIndex] = tempAmpere || '00,00';
+                      setAmpereConsumoFinalCaEvidencia(newValues);
+                      ampereConsumoFinalCaEvidenciaRef.current = newValues;
+                    }
+                  } else if (activeAmpereTarget === 'fotoConsumoFinalCcRectificador') {
+                    setAmpereDisplayRectificadorFinal(tempAmpere || '00,00');
+                    ampereDisplayRectificadorFinalRef.current = tempAmpere || '00,00';
+                  } else if (activeAmpereTarget === 'fotoEquipo3GEncendido') {
                     setAmpere3GEncendido(tempAmpere || '00,00');
+                  } else if (activeAmpereTarget === 'fotoDisplayRectificador') {
+                    setAmpereDisplayRectificador(tempAmpere || '00,00');
+                    ampereDisplayRectificadorRef.current = tempAmpere || '00,00';
+                  } else if (activeAmpereTarget === 'fotoConsumoInicialCc1') {
+                    setAmpereConsumoInicialCc1(tempAmpere || '00,00');
+                    ampereConsumoInicialCc1Ref.current = tempAmpere || '00,00';
+                  } else if (activeAmpereTarget === 'fotoConsumoFinalCc1') {
+                    setAmpereConsumoFinalCc1(tempAmpere || '00,00');
+                    ampereConsumoFinalCc1Ref.current = tempAmpere || '00,00';
+                  } else if (activeAmpereTarget === 'fotoConsumoInicialCc2') {
+                    setAmpereConsumoInicialCc2(tempAmpere || '00,00');
+                    ampereConsumoInicialCc2Ref.current = tempAmpere || '00,00';
+                  } else if (activeAmpereTarget === 'fotoConsumoFinalCc2') {
+                    setAmpereConsumoFinalCc2(tempAmpere || '00,00');
+                    ampereConsumoFinalCc2Ref.current = tempAmpere || '00,00';
+                  } else if (activeAmpereTarget === 'fotoConsumoInicialCc3') {
+                    setAmpereConsumoInicialCc3(tempAmpere || '00,00');
+                    ampereConsumoInicialCc3Ref.current = tempAmpere || '00,00';
+                  } else if (activeAmpereTarget === 'fotoConsumoFinalCc3') {
+                    setAmpereConsumoFinalCc3(tempAmpere || '00,00');
+                    ampereConsumoFinalCc3Ref.current = tempAmpere || '00,00';
                   } else if (activeAmpereTarget === 'fotosConsumoFinal') {
                     if (activeAmpereIndex !== null) {
                       const newValues = [...ampereConsumoFinal];
@@ -2916,9 +3925,9 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
                       numberOfLines={4}
                       editable={!isReadOnly}
                     />
-                    <Text style={styles.label}>Evidencia Fotográfica ({fotos.length}/10)</Text>
+                    <Text style={styles.label}>Evidencia Fotográfica ({isReadOnly ? (fotos.filter(u => u.startsWith('http')).length) : fotos.length}/10)</Text>
                     <View style={styles.photoGrid}>
-                      {fotos.map((uri, idx) => (
+                      {(isReadOnly ? fotos.filter(u => typeof u === 'string' && u.startsWith('http')) : fotos).map((uri, idx) => (
                         <TouchableOpacity key={idx} style={styles.photoThumbContainer} onPress={() => setPreviewUri(uri)}>
                           <Image source={{ uri }} style={styles.photoThumb} />
                           {!isReadOnly && (
@@ -2928,9 +3937,19 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
                           )}
                         </TouchableOpacity>
                       ))}
+                      {isReadOnly && fotos.filter(u => typeof u === 'string' && u.startsWith('http')).length === 0 && fotos.length > 0 && (
+                        <View style={{ padding: 16, alignItems: 'center' }}>
+                          <Ionicons name="cloud-download-outline" size={32} color="rgba(255,255,255,0.4)" />
+                          <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 13, marginTop: 6, textAlign: 'center' }}>
+                            Las fotos se cargan al descargar el informe
+                          </Text>
+                        </View>
+                      )}
                       {!isReadOnly && fotos.length < 10 && (
                         <TouchableOpacity style={styles.addPhotoBox} onPress={() => handlePickImage('hallazgos')}>
-                          <Ionicons name="camera" size={32} color="rgba(255,255,255,0.3)" />
+                          <View style={{ justifyContent: 'center', alignItems: 'center' }}>
+                            <Ionicons name="camera" size={32} color="rgba(255,255,255,0.3)" />
+                          </View>
                         </TouchableOpacity>
                       )}
                     </View>
@@ -3200,6 +4219,121 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
                 <View>
                   <View style={styles.formSection}>
                     
+                    {/* Consumo Final CA en Breaker General */}
+                    <View style={{ marginBottom: 20 }}>
+                      {tipoEmpalme === 'Monofásico' ? (
+                        <View style={styles.photoField}>
+                          <Text style={styles.label}>Consumo Final CA Monofásico Breaker General</Text>
+                          {fotosConsumoFinalCaEvidencia && fotosConsumoFinalCaEvidencia[0] ? (
+                            <View>
+                              <View style={styles.photoFullContainer}>
+                                <TouchableOpacity onPress={() => setPreviewUri(fotosConsumoFinalCaEvidencia[0])}>
+                                  <Image source={{ uri: fotosConsumoFinalCaEvidencia[0] }} style={styles.photoFull} resizeMode="cover" />
+                                </TouchableOpacity>
+                                {!isReadOnly && (
+                                  <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotosConsumoFinalCaEvidencia', 0)}>
+                                    <Ionicons name="close-circle" size={24} color={colors.danger} />
+                                  </TouchableOpacity>
+                                )}
+                              </View>
+                              <TouchableOpacity 
+                                style={styles.ampereDisplay} 
+                                onPress={() => !isReadOnly && (setActiveAmpereTarget('fotosConsumoFinalCaEvidencia'), setActiveAmpereIndex(0), setTempAmpere(ampereConsumoFinalCaEvidencia[0] || ''), setShowAmpereModal(true))}
+                                activeOpacity={isReadOnly ? 1 : 0.7}
+                              >
+                                <Text style={styles.ampereText}>Lectura: {ampereConsumoFinalCaEvidencia[0] || '00,00'} A</Text>
+                                <Ionicons name="create-outline" size={16} color={colors.primary} />
+                              </TouchableOpacity>
+                            </View>
+                          ) : (
+                            !isReadOnly ? (
+                              <TouchableOpacity style={styles.addPhotoLarge} onPress={() => handlePickImage('fotosConsumoFinalCaEvidencia', 0)}>
+                                <Ionicons name="camera" size={32} color="rgba(255,255,255,0.3)" />
+                                <Text style={styles.addPhotoText}>Subir Foto</Text>
+                              </TouchableOpacity>
+                            ) : null
+                          )}
+                        </View>
+                      ) : (
+                        <View>
+                          <Text style={styles.label}>Consumo Final CA Trifásico Breaker General</Text>
+                          {['Fase R', 'Fase S', 'Fase T'].map((label, i) => (
+                            <View key={i} style={styles.trifasicoRow}>
+                              <View style={styles.trifasicoPhotoCol}>
+                                {fotosConsumoFinalCaEvidencia && fotosConsumoFinalCaEvidencia[i] ? (
+                                  <View style={styles.trifasicoPhotoWrapper}>
+                                    <TouchableOpacity onPress={() => setPreviewUri(fotosConsumoFinalCaEvidencia[i])}>
+                                      <Image source={{ uri: fotosConsumoFinalCaEvidencia[i] }} style={styles.photoThumb} />
+                                    </TouchableOpacity>
+                                    {!isReadOnly && (
+                                      <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotosConsumoFinalCaEvidencia', i)}>
+                                        <Ionicons name="close-circle" size={24} color={colors.danger} />
+                                      </TouchableOpacity>
+                                    )}
+                                  </View>
+                                ) : (
+                                  !isReadOnly ? (
+                                    <TouchableOpacity style={styles.trifasicoAddBox} onPress={() => handlePickImage('fotosConsumoFinalCaEvidencia', i)}>
+                                      <Ionicons name="camera" size={24} color="rgba(255,255,255,0.3)" />
+                                    </TouchableOpacity>
+                                  ) : null
+                                )}
+                              </View>
+                              <View style={styles.trifasicoInfoCol}>
+                                <Text style={styles.trifasicoLabel}>{label}</Text>
+                                {fotosConsumoFinalCaEvidencia && fotosConsumoFinalCaEvidencia[i] && (
+                                  <TouchableOpacity 
+                                    style={styles.ampereDisplayTrifasico} 
+                                    onPress={() => !isReadOnly && (setActiveAmpereTarget('fotosConsumoFinalCaEvidencia'), setActiveAmpereIndex(i), setTempAmpere(ampereConsumoFinalCaEvidencia[i] || ''), setShowAmpereModal(true))}
+                                    activeOpacity={isReadOnly ? 1 : 0.7}
+                                  >
+                                    <Text style={styles.ampereTextTrifasico}>{ampereConsumoFinalCaEvidencia[i] || '00,00'} A</Text>
+                                    <Ionicons name="create-outline" size={16} color={colors.primary} />
+                                  </TouchableOpacity>
+                                )}
+                              </View>
+                            </View>
+                          ))}
+                        </View>
+                      )}
+                    </View>
+
+                    {/* Consumo Final CC en Rectificador */}
+                    <View style={{ marginBottom: 20 }}>
+                      <View style={styles.photoField}>
+                        <Text style={styles.label}>Consumo Final CC Rectificador (display)</Text>
+                        {fotoConsumoFinalCcRectificador ? (
+                          <View>
+                            <View style={styles.photoFullContainer}>
+                              <TouchableOpacity onPress={() => setPreviewUri(fotoConsumoFinalCcRectificador)}>
+                                <Image source={{ uri: fotoConsumoFinalCcRectificador }} style={styles.photoFull} resizeMode="cover" />
+                              </TouchableOpacity>
+                              {!isReadOnly && (
+                                <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotoConsumoFinalCcRectificador')}>
+                                  <Ionicons name="close-circle" size={24} color={colors.danger} />
+                                </TouchableOpacity>
+                              )}
+                            </View>
+                            <TouchableOpacity 
+                              style={styles.ampereDisplay} 
+                              onPress={() => !isReadOnly && (setActiveAmpereTarget('fotoConsumoFinalCcRectificador'), setActiveAmpereIndex(0), setTempAmpere(ampereDisplayRectificadorFinal || ''), setShowAmpereModal(true))}
+                              activeOpacity={isReadOnly ? 1 : 0.7}
+                            >
+                              <Text style={styles.ampereText}>Lectura: {ampereDisplayRectificadorFinal || '00,00'} A</Text>
+                              <Ionicons name="create-outline" size={16} color={colors.primary} />
+                            </TouchableOpacity>
+                          </View>
+                        ) : (
+                          !isReadOnly ? (
+                            <TouchableOpacity style={styles.addPhotoLarge} onPress={() => handlePickImage('fotoConsumoFinalCcRectificador')}>
+                              <Ionicons name="camera" size={32} color="rgba(255,255,255,0.3)" />
+                              <Text style={styles.addPhotoText}>Subir Foto</Text>
+                            </TouchableOpacity>
+                          ) : null
+                        )}
+                      </View>
+                    </View>
+
                     {/* Vista General del Rectificador */}
                     <View style={styles.photoField}>
                       <Text style={styles.label}>Vista General del Rectificador</Text>
@@ -3332,6 +4466,7 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
                       ) : null}
                     </View>
 
+
                   </View>
                 </View>
               )}
@@ -3390,7 +4525,7 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
                               {[0, 1].map((i) => (
                                 <View key={`gs-${i}`} style={styles.photoCol}>
                                   {fotosGeneralesSitio[i] ? (
-                                    <View style={styles.photoThumbContainer}>
+                                    <View style={styles.trifasicoPhotoWrapper}>
                                       <TouchableOpacity onPress={() => setPreviewUri(fotosGeneralesSitio[i])}>
                                         <Image source={{ uri: fotosGeneralesSitio[i] }} style={styles.photoThumb} />
                                       </TouchableOpacity>
@@ -3399,8 +4534,10 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
                                       </TouchableOpacity>
                                     </View>
                                   ) : (
-                                    <TouchableOpacity style={styles.addPhotoBox} onPress={() => handlePickImage('fotosGeneralesSitio', i)}>
-                                      <Ionicons name="camera" size={24} color="rgba(255,255,255,0.3)" />
+                                    <TouchableOpacity style={styles.addPhotoBox2Col} onPress={() => handlePickImage('fotosGeneralesSitio', i)}>
+                                      <View style={{ justifyContent: 'center', alignItems: 'center' }}>
+                                        <Ionicons name="camera" size={24} color="rgba(255,255,255,0.3)" />
+                                      </View>
                                     </TouchableOpacity>
                                   )}
                                 </View>
@@ -3415,7 +4552,7 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
                               {[0, 1].map((i) => (
                                 <View key={`ic-${i}`} style={styles.photoCol}>
                                   {fotosInteriorContenedor[i] ? (
-                                    <View style={styles.photoThumbContainer}>
+                                    <View style={styles.trifasicoPhotoWrapper}>
                                       <TouchableOpacity onPress={() => setPreviewUri(fotosInteriorContenedor[i])}>
                                         <Image source={{ uri: fotosInteriorContenedor[i] }} style={styles.photoThumb} />
                                       </TouchableOpacity>
@@ -3424,8 +4561,10 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
                                       </TouchableOpacity>
                                     </View>
                                   ) : (
-                                    <TouchableOpacity style={styles.addPhotoBox} onPress={() => handlePickImage('fotosInteriorContenedor', i)}>
-                                      <Ionicons name="camera" size={24} color="rgba(255,255,255,0.3)" />
+                                    <TouchableOpacity style={styles.addPhotoBox2Col} onPress={() => handlePickImage('fotosInteriorContenedor', i)}>
+                                      <View style={{ justifyContent: 'center', alignItems: 'center' }}>
+                                        <Ionicons name="camera" size={24} color="rgba(255,255,255,0.3)" />
+                                      </View>
                                     </TouchableOpacity>
                                   )}
                                 </View>
@@ -3436,20 +4575,44 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
                       </View>
                     )}
                     {fotosInteriorContenedor[0] !== '' && fotosInteriorContenedor[1] !== '' && (
-                      <SelectDropdown label="Tipo de Empalme" value={tipoEmpalme} options={tipoEmpalmeOptions} onSelect={(val) => {
-                        setTipoEmpalme(val);
-                        if (val === 'Monofásico') setFotosEmpalme(['']);
-                        else if (val === 'Trifásico') setFotosEmpalme(['', '', '']);
-                      }} disabled={isReadOnly} />
+                      <View style={{ marginTop: 20 }}>
+                        <SelectDropdown label="Tipo de Empalme" value={tipoEmpalme} options={tipoEmpalmeOptions} onSelect={(val: string) => {
+                          setTipoEmpalme(val);
+                          tipoEmpalmeRef.current = val;
+                          if (val === 'Monofásico') {
+                            setFotosEmpalme(['']);
+                            fotosEmpalmeRef.current = [''];
+                            // Adaptar arrays de Evidencia Salida CA a 1 elemento
+                            const newFotosEv = [fotosConsumoFinalCaEvidenciaRef.current[0] || ''];
+                            const newAmpEv = [ampereConsumoFinalCaEvidenciaRef.current[0] || ''];
+                            setFotosConsumoFinalCaEvidencia(newFotosEv);
+                            fotosConsumoFinalCaEvidenciaRef.current = newFotosEv;
+                            setAmpereConsumoFinalCaEvidencia(newAmpEv);
+                            ampereConsumoFinalCaEvidenciaRef.current = newAmpEv;
+                          } else if (val === 'Trifásico') {
+                            setFotosEmpalme(['', '', '']);
+                            fotosEmpalmeRef.current = ['', '', ''];
+                            // Adaptar arrays de Evidencia Salida CA a 3 elementos
+                            const existFotos = fotosConsumoFinalCaEvidenciaRef.current;
+                            const existAmp = ampereConsumoFinalCaEvidenciaRef.current;
+                            const newFotosEv = [existFotos[0] || '', existFotos[1] || '', existFotos[2] || ''];
+                            const newAmpEv = [existAmp[0] || '', existAmp[1] || '', existAmp[2] || ''];
+                            setFotosConsumoFinalCaEvidencia(newFotosEv);
+                            fotosConsumoFinalCaEvidenciaRef.current = newFotosEv;
+                            setAmpereConsumoFinalCaEvidencia(newAmpEv);
+                            ampereConsumoFinalCaEvidenciaRef.current = newAmpEv;
+                          }
+                        }} disabled={isReadOnly} />
+                      </View>
                     )}
                     {tipoEmpalme === 'Monofásico' && (
                       <View style={styles.photoField}>
-                        <Text style={styles.label}>Foto Consumo Inicial</Text>
+                        <Text style={styles.label}>Consumo Inicial CA Monofásico Breaker General</Text>
                         {fotosEmpalme[0] ? (
                           <View>
-                            <View style={styles.photoThumbContainer}>
+                            <View style={styles.photoFullContainer}>
                               <TouchableOpacity onPress={() => setPreviewUri(fotosEmpalme[0])}>
-                                <Image source={{ uri: fotosEmpalme[0] }} style={styles.photoFull} />
+                                <Image source={{ uri: fotosEmpalme[0] }} style={styles.photoFull} resizeMode="cover" />
                               </TouchableOpacity>
                               <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotosEmpalme', 0)}>
                                 {!isReadOnly && <Ionicons name="close-circle" size={24} color={colors.danger} />}
@@ -3474,7 +4637,7 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
                     )}
                     {tipoEmpalme === 'Trifásico' && (
                       <View style={{ marginTop: 10 }}>
-                        <Text style={styles.label}>Fotos Consumo Inicial Trifásico</Text>
+                        <Text style={styles.label}>Consumo Inicial CA Trifásico Breaker General</Text>
                         {['Fase R', 'Fase S', 'Fase T'].map((label, i) => (
                           <View key={i} style={styles.trifasicoRow}>
                             <View style={styles.trifasicoPhotoCol}>
@@ -3510,19 +4673,51 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
                         ))}
                       </View>
                     )}
-                    {((tipoEmpalme === 'Monofásico' && fotosEmpalme[0]) || (tipoEmpalme === 'Trifásico' && fotosEmpalme[0] && fotosEmpalme[1] && fotosEmpalme[2])) && (
-                      <SelectDropdown
-                        label="Capacidad de Protección General"
-                        value={capacidadProteccion}
-                        options={[
-                          { id: '16A', label: '16A' },
-                          { id: '32A', label: '32A' },
-                          { id: '40A', label: '40A' },
-                          { id: '63A', label: '63A' },
-                        ]}
-                        onSelect={setCapacidadProteccion}
-                        disabled={isReadOnly}
-                      />
+                    {isAmpereEmpalmeFilled && (
+                      <View style={styles.photoField}>
+                        <Text style={styles.label}>Consumo Inicial CC Rectificador (display)</Text>
+                        {fotoDisplayRectificador ? (
+                          <View>
+                            <View style={styles.photoFullContainer}>
+                              <TouchableOpacity onPress={() => setPreviewUri(fotoDisplayRectificador)}>
+                                <Image source={{ uri: fotoDisplayRectificador }} style={styles.photoFull} resizeMode="cover" />
+                              </TouchableOpacity>
+                              <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotoDisplayRectificador')}>
+                                {!isReadOnly && <Ionicons name="close-circle" size={24} color={colors.danger} />}
+                              </TouchableOpacity>
+                            </View>
+                            <TouchableOpacity 
+                              style={styles.ampereDisplay} 
+                              onPress={() => !isReadOnly && (setActiveAmpereTarget('fotoDisplayRectificador'), setActiveAmpereIndex(0), setTempAmpere(ampereDisplayRectificador), setShowAmpereModal(true))}
+                              activeOpacity={isReadOnly ? 1 : 0.7}
+                            >
+                              <Text style={styles.ampereText}>Lectura: {ampereDisplayRectificador || '00,00'} A</Text>
+                              <Ionicons name="create-outline" size={16} color={colors.primary} />
+                            </TouchableOpacity>
+                          </View>
+                        ) : (
+                          <TouchableOpacity style={styles.addPhotoLarge} onPress={() => handlePickImage('fotoDisplayRectificador')}>
+                            <Ionicons name="camera" size={32} color="rgba(255,255,255,0.3)" />
+                            <Text style={styles.addPhotoText}>Subir Foto</Text>
+                          </TouchableOpacity>
+                        )}
+                      </View>
+                    )}
+                    {isAmpereEmpalmeFilled && fotoDisplayRectificador !== '' && ampereDisplayRectificador !== '' && ampereDisplayRectificador !== '00,00' && (
+                      <View style={{ marginTop: 12 }}>
+                        <SelectDropdown
+                          label="Capacidad de Protección General"
+                          value={capacidadProteccion}
+                          options={[
+                            { id: '16A', label: '16A' },
+                            { id: '32A', label: '32A' },
+                            { id: '40A', label: '40A' },
+                            { id: '63A', label: '63A' },
+                          ]}
+                          onSelect={setCapacidadProteccion}
+                          disabled={isReadOnly}
+                        />
+                      </View>
                     )}
                     {capacidadProteccion !== '' && (
                       <View style={styles.photoField}>
@@ -3634,11 +4829,34 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
                             ) : null}
                           </View>
 
-                          {fotoBreakerBaseband1Encendido !== '' && fotoBaseband1Encendida !== '' && (
+                          <View style={styles.photoField}>
+                            <Text style={styles.label}>Consumo Inicial CC en Baseband S1</Text>
+                            {fotoConsumoInicialCc1 ? (
+                              <View style={styles.photoFullContainer}>
+                                <TouchableOpacity onPress={() => setPreviewUri(fotoConsumoInicialCc1)}>
+                                  <Image source={{ uri: fotoConsumoInicialCc1 }} style={styles.photoFull} resizeMode="cover" />
+                                </TouchableOpacity>
+                                {!isReadOnly && (
+                                  <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotoConsumoInicialCc1')}>
+                                    <Ionicons name="close-circle" size={24} color={colors.danger} />
+                                  </TouchableOpacity>
+                                )}
+                              </View>
+                            ) : !isReadOnly ? (
+                              <TouchableOpacity style={styles.addPhotoLarge} onPress={() => handlePickImage('fotoConsumoInicialCc1')}>
+                                <Ionicons name="camera" size={32} color="rgba(255,255,255,0.3)" />
+                                <Text style={styles.addPhotoText}>Subir Foto</Text>
+                              </TouchableOpacity>
+                            ) : null}
+                          </View>
+
+
+
+                          {fotoBreakerBaseband1Encendido !== '' && fotoBaseband1Encendida !== '' && fotoConsumoInicialCc1 !== '' && (
                             !confirmadoApagadoRetirar ? (
                               <View style={styles.warningCard}>
                                 <Ionicons name="warning" size={32} color="#FF9500" style={{ marginBottom: 8 }} />
-                                <Text style={styles.warningCardText}>Proceder a apagar breaker y retirar Baseband S1</Text>
+                                <Text style={styles.warningCardText}>Apagar Breaker, Registrar Consumo Final y luego retirar Baseband S1</Text>
                                 {!isReadOnly && (
                                   <TouchableOpacity style={styles.warningConfirmBtn} onPress={() => setConfirmadoApagadoRetirar(true)}>
                                     <Text style={styles.warningConfirmBtnText}>Confirmar realización</Text>
@@ -3648,7 +4866,7 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
                             ) : (
                               <View style={styles.successBadge}>
                                 <Ionicons name="checkmark-circle" size={24} color="#34C759" />
-                                <Text style={styles.successBadgeText}>Breaker apagado y Baseband S1 retirada confirmado</Text>
+                                <Text style={styles.successBadgeText}>Realización confirmada</Text>
                               </View>
                             )
                           )}
@@ -3677,6 +4895,29 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
                               </View>
 
                               <View style={styles.photoField}>
+                                <Text style={styles.label}>Consumo Final CC en Baseband S1</Text>
+                                {fotoConsumoFinalCc1 ? (
+                                  <View style={styles.photoFullContainer}>
+                                    <TouchableOpacity onPress={() => setPreviewUri(fotoConsumoFinalCc1)}>
+                                      <Image source={{ uri: fotoConsumoFinalCc1 }} style={styles.photoFull} resizeMode="cover" />
+                                    </TouchableOpacity>
+                                    {!isReadOnly && (
+                                      <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotoConsumoFinalCc1')}>
+                                        <Ionicons name="close-circle" size={24} color={colors.danger} />
+                                      </TouchableOpacity>
+                                    )}
+                                  </View>
+                                ) : !isReadOnly ? (
+                                  <TouchableOpacity style={styles.addPhotoLarge} onPress={() => handlePickImage('fotoConsumoFinalCc1')}>
+                                    <Ionicons name="camera" size={32} color="rgba(255,255,255,0.3)" />
+                                    <Text style={styles.addPhotoText}>Subir Foto</Text>
+                                  </TouchableOpacity>
+                                ) : null}
+                              </View>
+
+
+
+                              <View style={styles.photoField}>
                                 <Text style={styles.label}>Foto de Espacio de Baseband S1 Retirada</Text>
                                 {fotoEspacioBaseband1Retirada ? (
                                   <View style={styles.photoFullContainer}>
@@ -3696,8 +4937,6 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
                                   </TouchableOpacity>
                                 ) : null}
                               </View>
-
-                              {renderConsumoFinalFields('fotosConsumoFinal', fotosConsumoFinal, ampereConsumoFinal)}
                             </View>
                           )}
                         </View>
@@ -3708,7 +4947,7 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
                           {!confirmadoApagadoRetirar ? (
                             <View style={styles.warningCard}>
                               <Ionicons name="warning" size={32} color="#FF9500" style={{ marginBottom: 8 }} />
-                              <Text style={styles.warningCardText}>Proceder a retirar Baseband S1</Text>
+                              <Text style={styles.warningCardText}>Registrar Consumo Final y luego retirar Baseband S1</Text>
                               {!isReadOnly && (
                                 <TouchableOpacity style={styles.warningConfirmBtn} onPress={() => setConfirmadoApagadoRetirar(true)}>
                                   <Text style={styles.warningConfirmBtnText}>Confirmar realización</Text>
@@ -3742,6 +4981,29 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
                                   </TouchableOpacity>
                                 ) : null}
                               </View>
+
+                              <View style={styles.photoField}>
+                                <Text style={styles.label}>Consumo Final CC en Baseband S1</Text>
+                                {fotoConsumoFinalCc1 ? (
+                                  <View style={styles.photoFullContainer}>
+                                    <TouchableOpacity onPress={() => setPreviewUri(fotoConsumoFinalCc1)}>
+                                      <Image source={{ uri: fotoConsumoFinalCc1 }} style={styles.photoFull} resizeMode="cover" />
+                                    </TouchableOpacity>
+                                    {!isReadOnly && (
+                                      <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotoConsumoFinalCc1')}>
+                                        <Ionicons name="close-circle" size={24} color={colors.danger} />
+                                      </TouchableOpacity>
+                                    )}
+                                  </View>
+                                ) : !isReadOnly ? (
+                                  <TouchableOpacity style={styles.addPhotoLarge} onPress={() => handlePickImage('fotoConsumoFinalCc1')}>
+                                    <Ionicons name="camera" size={32} color="rgba(255,255,255,0.3)" />
+                                    <Text style={styles.addPhotoText}>Subir Foto</Text>
+                                  </TouchableOpacity>
+                                ) : null}
+                              </View>
+
+
 
                               <View style={styles.photoField}>
                                 <Text style={styles.label}>Foto de Espacio de Baseband S1 Retirada</Text>
@@ -4206,11 +5468,32 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
                           ) : null}
                         </View>
 
-                        {fotoBreakerBaseband2Encendido !== '' && fotoBaseband2Encendida !== '' && (
+                        <View style={styles.photoField}>
+                          <Text style={styles.label}>Consumo Inicial CC en Baseband S2</Text>
+                          {fotoConsumoInicialCc2 ? (
+                            <View style={styles.photoFullContainer}>
+                              <TouchableOpacity onPress={() => setPreviewUri(fotoConsumoInicialCc2)}>
+                                <Image source={{ uri: fotoConsumoInicialCc2 }} style={styles.photoFull} resizeMode="cover" />
+                              </TouchableOpacity>
+                              {!isReadOnly && (
+                                <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotoConsumoInicialCc2')}>
+                                  <Ionicons name="close-circle" size={24} color={colors.danger} />
+                                </TouchableOpacity>
+                              )}
+                            </View>
+                          ) : !isReadOnly ? (
+                            <TouchableOpacity style={styles.addPhotoLarge} onPress={() => handlePickImage('fotoConsumoInicialCc2')}>
+                              <Ionicons name="camera" size={32} color="rgba(255,255,255,0.3)" />
+                              <Text style={styles.addPhotoText}>Subir Foto</Text>
+                            </TouchableOpacity>
+                          ) : null}
+                        </View>
+
+                        {fotoBreakerBaseband2Encendido !== '' && fotoBaseband2Encendida !== '' && fotoConsumoInicialCc2 !== '' && (
                           !confirmadoApagadoRetirarS2 ? (
                             <View style={styles.warningCard}>
                               <Ionicons name="warning" size={32} color="#FF9500" style={{ marginBottom: 8 }} />
-                              <Text style={styles.warningCardText}>Proceder a apagar breaker y retirar Baseband S2</Text>
+                              <Text style={styles.warningCardText}>Apagar Breaker, Registrar Consumo Final y luego retirar Baseband S2</Text>
                               {!isReadOnly && (
                                 <TouchableOpacity style={styles.warningConfirmBtn} onPress={() => setConfirmadoApagadoRetirarS2(true)}>
                                   <Text style={styles.warningConfirmBtnText}>Confirmar realización</Text>
@@ -4220,7 +5503,7 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
                           ) : (
                             <View style={styles.successBadge}>
                               <Ionicons name="checkmark-circle" size={24} color="#34C759" />
-                              <Text style={styles.successBadgeText}>Breaker apagado y Baseband S2 retirada confirmado</Text>
+                              <Text style={styles.successBadgeText}>Realización confirmada</Text>
                             </View>
                           )
                         )}
@@ -4249,6 +5532,29 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
                             </View>
 
                             <View style={styles.photoField}>
+                              <Text style={styles.label}>Consumo Final CC en Baseband S2</Text>
+                              {fotoConsumoFinalCc2 ? (
+                                <View style={styles.photoFullContainer}>
+                                  <TouchableOpacity onPress={() => setPreviewUri(fotoConsumoFinalCc2)}>
+                                    <Image source={{ uri: fotoConsumoFinalCc2 }} style={styles.photoFull} resizeMode="cover" />
+                                  </TouchableOpacity>
+                                  {!isReadOnly && (
+                                    <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotoConsumoFinalCc2')}>
+                                      <Ionicons name="close-circle" size={24} color={colors.danger} />
+                                    </TouchableOpacity>
+                                  )}
+                                </View>
+                              ) : !isReadOnly ? (
+                                <TouchableOpacity style={styles.addPhotoLarge} onPress={() => handlePickImage('fotoConsumoFinalCc2')}>
+                                  <Ionicons name="camera" size={32} color="rgba(255,255,255,0.3)" />
+                                  <Text style={styles.addPhotoText}>Subir Foto</Text>
+                                </TouchableOpacity>
+                              ) : null}
+                            </View>
+
+
+
+                            <View style={styles.photoField}>
                               <Text style={styles.label}>Foto de Espacio de Baseband S2 Retirada</Text>
                               {fotoEspacioBaseband2Retirada ? (
                                 <View style={styles.photoFullContainer}>
@@ -4268,8 +5574,6 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
                                 </TouchableOpacity>
                               ) : null}
                             </View>
-
-                            {renderConsumoFinalFields('fotosConsumoFinalS2', fotosConsumoFinalS2, ampereConsumoFinalS2)}
                           </View>
                         )}
                       </View>
@@ -4280,7 +5584,7 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
                         {!confirmadoApagadoRetirarS2 ? (
                           <View style={styles.warningCard}>
                             <Ionicons name="warning" size={32} color="#FF9500" style={{ marginBottom: 8 }} />
-                            <Text style={styles.warningCardText}>Proceder a retirar Baseband S2</Text>
+                            <Text style={styles.warningCardText}>Registrar Consumo Final y luego retirar Baseband S2</Text>
                             {!isReadOnly && (
                               <TouchableOpacity style={styles.warningConfirmBtn} onPress={() => setConfirmadoApagadoRetirarS2(true)}>
                                 <Text style={styles.warningConfirmBtnText}>Confirmar realización</Text>
@@ -4314,6 +5618,29 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
                                 </TouchableOpacity>
                               ) : null}
                             </View>
+
+                            <View style={styles.photoField}>
+                              <Text style={styles.label}>Consumo Final CC en Baseband S2</Text>
+                              {fotoConsumoFinalCc2 ? (
+                                <View style={styles.photoFullContainer}>
+                                  <TouchableOpacity onPress={() => setPreviewUri(fotoConsumoFinalCc2)}>
+                                    <Image source={{ uri: fotoConsumoFinalCc2 }} style={styles.photoFull} resizeMode="cover" />
+                                  </TouchableOpacity>
+                                  {!isReadOnly && (
+                                    <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotoConsumoFinalCc2')}>
+                                      <Ionicons name="close-circle" size={24} color={colors.danger} />
+                                    </TouchableOpacity>
+                                  )}
+                                </View>
+                              ) : !isReadOnly ? (
+                                <TouchableOpacity style={styles.addPhotoLarge} onPress={() => handlePickImage('fotoConsumoFinalCc2')}>
+                                  <Ionicons name="camera" size={32} color="rgba(255,255,255,0.3)" />
+                                  <Text style={styles.addPhotoText}>Subir Foto</Text>
+                                </TouchableOpacity>
+                              ) : null}
+                            </View>
+
+
 
                             <View style={styles.photoField}>
                               <Text style={styles.label}>Foto de Espacio de Baseband S2 Retirada</Text>
@@ -4404,11 +5731,34 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
                           ) : null}
                         </View>
 
-                        {fotoBreakerBaseband3Encendido !== '' && fotoBaseband3Encendida !== '' && (
+                        <View style={styles.photoField}>
+                          <Text style={styles.label}>Consumo Inicial CC en Baseband S3</Text>
+                          {fotoConsumoInicialCc3 ? (
+                            <View style={styles.photoFullContainer}>
+                              <TouchableOpacity onPress={() => setPreviewUri(fotoConsumoInicialCc3)}>
+                                <Image source={{ uri: fotoConsumoInicialCc3 }} style={styles.photoFull} resizeMode="cover" />
+                              </TouchableOpacity>
+                              {!isReadOnly && (
+                                <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotoConsumoInicialCc3')}>
+                                  <Ionicons name="close-circle" size={24} color={colors.danger} />
+                                </TouchableOpacity>
+                              )}
+                            </View>
+                          ) : !isReadOnly ? (
+                            <TouchableOpacity style={styles.addPhotoLarge} onPress={() => handlePickImage('fotoConsumoInicialCc3')}>
+                              <Ionicons name="camera" size={32} color="rgba(255,255,255,0.3)" />
+                              <Text style={styles.addPhotoText}>Subir Foto</Text>
+                            </TouchableOpacity>
+                          ) : null}
+                        </View>
+
+
+
+                        {fotoBreakerBaseband3Encendido !== '' && fotoBaseband3Encendida !== '' && fotoConsumoInicialCc3 !== '' && (
                           !confirmadoApagadoRetirarS3 ? (
                             <View style={styles.warningCard}>
                               <Ionicons name="warning" size={32} color="#FF9500" style={{ marginBottom: 8 }} />
-                              <Text style={styles.warningCardText}>Proceder a apagar breaker y retirar Baseband S3</Text>
+                              <Text style={styles.warningCardText}>Apagar Breaker, Registrar Consumo Final y luego retirar Baseband S3</Text>
                               {!isReadOnly && (
                                 <TouchableOpacity style={styles.warningConfirmBtn} onPress={() => setConfirmadoApagadoRetirarS3(true)}>
                                   <Text style={styles.warningConfirmBtnText}>Confirmar realización</Text>
@@ -4418,7 +5768,7 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
                           ) : (
                             <View style={styles.successBadge}>
                               <Ionicons name="checkmark-circle" size={24} color="#34C759" />
-                              <Text style={styles.successBadgeText}>Breaker apagado y Baseband S3 retirada confirmado</Text>
+                              <Text style={styles.successBadgeText}>Realización confirmada</Text>
                             </View>
                           )
                         )}
@@ -4447,6 +5797,29 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
                             </View>
 
                             <View style={styles.photoField}>
+                              <Text style={styles.label}>Consumo Final CC en Baseband S3</Text>
+                              {fotoConsumoFinalCc3 ? (
+                                <View style={styles.photoFullContainer}>
+                                  <TouchableOpacity onPress={() => setPreviewUri(fotoConsumoFinalCc3)}>
+                                    <Image source={{ uri: fotoConsumoFinalCc3 }} style={styles.photoFull} resizeMode="cover" />
+                                  </TouchableOpacity>
+                                  {!isReadOnly && (
+                                    <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotoConsumoFinalCc3')}>
+                                      <Ionicons name="close-circle" size={24} color={colors.danger} />
+                                    </TouchableOpacity>
+                                  )}
+                                </View>
+                              ) : !isReadOnly ? (
+                                <TouchableOpacity style={styles.addPhotoLarge} onPress={() => handlePickImage('fotoConsumoFinalCc3')}>
+                                  <Ionicons name="camera" size={32} color="rgba(255,255,255,0.3)" />
+                                  <Text style={styles.addPhotoText}>Subir Foto</Text>
+                                </TouchableOpacity>
+                              ) : null}
+                            </View>
+
+
+
+                            <View style={styles.photoField}>
                               <Text style={styles.label}>Foto de Espacio de Baseband S3 Retirada</Text>
                               {fotoEspacioBaseband3Retirada ? (
                                 <View style={styles.photoFullContainer}>
@@ -4466,8 +5839,6 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
                                 </TouchableOpacity>
                               ) : null}
                             </View>
-
-                            {renderConsumoFinalFields('fotosConsumoFinalS3', fotosConsumoFinalS3, ampereConsumoFinalS3)}
                           </View>
                         )}
                       </View>
@@ -4478,7 +5849,7 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
                         {!confirmadoApagadoRetirarS3 ? (
                           <View style={styles.warningCard}>
                             <Ionicons name="warning" size={32} color="#FF9500" style={{ marginBottom: 8 }} />
-                            <Text style={styles.warningCardText}>Proceder a retirar Baseband S3</Text>
+                            <Text style={styles.warningCardText}>Registrar Consumo Final y luego retirar Baseband S3</Text>
                             {!isReadOnly && (
                               <TouchableOpacity style={styles.warningConfirmBtn} onPress={() => setConfirmadoApagadoRetirarS3(true)}>
                                 <Text style={styles.warningConfirmBtnText}>Confirmar realización</Text>
@@ -4514,6 +5885,29 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
                             </View>
 
                             <View style={styles.photoField}>
+                              <Text style={styles.label}>Consumo Final CC en Baseband S3</Text>
+                              {fotoConsumoFinalCc3 ? (
+                                <View style={styles.photoFullContainer}>
+                                  <TouchableOpacity onPress={() => setPreviewUri(fotoConsumoFinalCc3)}>
+                                    <Image source={{ uri: fotoConsumoFinalCc3 }} style={styles.photoFull} resizeMode="cover" />
+                                  </TouchableOpacity>
+                                  {!isReadOnly && (
+                                    <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotoConsumoFinalCc3')}>
+                                      <Ionicons name="close-circle" size={24} color={colors.danger} />
+                                    </TouchableOpacity>
+                                  )}
+                                </View>
+                              ) : !isReadOnly ? (
+                                <TouchableOpacity style={styles.addPhotoLarge} onPress={() => handlePickImage('fotoConsumoFinalCc3')}>
+                                  <Ionicons name="camera" size={32} color="rgba(255,255,255,0.3)" />
+                                  <Text style={styles.addPhotoText}>Subir Foto</Text>
+                                </TouchableOpacity>
+                              ) : null}
+                            </View>
+
+
+
+                            <View style={styles.photoField}>
                               <Text style={styles.label}>Foto de Espacio de Baseband S3 Retirada</Text>
                               {fotoEspacioBaseband3Retirada ? (
                                 <View style={styles.photoFullContainer}>
@@ -4547,18 +5941,18 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
                 <View>
                   <View style={styles.formSection}>
                     <SelectDropdown
-                      label="Estado Antena Sector 1"
-                      value={estadoAntenaSector1}
+                      label="¿Se apagará Antena del Sector 1?"
+                      value={seApagaraAntenaS1}
                       options={[
-                        { id: 'Encendida', label: 'Encendida' },
-                        { id: 'Apagada', label: 'Apagada' },
+                        { id: 'Si', label: 'Si' },
+                        { id: 'No', label: 'No' },
                         { id: 'N/A', label: 'N/A' },
                       ]}
-                      onSelect={handleEstadoAntenaSector1Change}
+                      onSelect={handleSeApagaraAntenaS1Change}
                       disabled={isReadOnly}
                     />
 
-                    {estadoAntenaSector1 === 'Encendida' && (
+                    {seApagaraAntenaS1 === 'Si' && (
                       <View style={{ gap: 12, marginTop: 12 }}>
                         <View style={styles.photoField}>
                           <Text style={styles.label}>Foto de Breaker Antena S1 Encendido</Text>
@@ -4581,68 +5975,99 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
                           ) : null}
                         </View>
 
-                        {fotoBreakerAntenaS1Encendido !== '' && (
-                          <View style={{ gap: 12 }}>
-                            <SelectDropdown
-                              label="¿Se apagará Antena del Sector 1?"
-                              value={seApagaraAntenaS1}
-                              options={siNoOptions}
-                              onSelect={setSeApagaraAntenaS1}
-                              disabled={isReadOnly}
-                            />
-
-                            {seApagaraAntenaS1 === 'Si' && (
-                              <View style={{ gap: 12 }}>
-                                <View style={styles.photoField}>
-                                  <Text style={styles.label}>Foto de Breaker Antena S1 Apagado</Text>
-                                  {fotoBreakerAntenaS1Apagado ? (
-                                    <View style={styles.photoFullContainer}>
-                                      <TouchableOpacity onPress={() => setPreviewUri(fotoBreakerAntenaS1Apagado)}>
-                                        <Image source={{ uri: fotoBreakerAntenaS1Apagado }} style={styles.photoFull} resizeMode="cover" />
-                                      </TouchableOpacity>
-                                      {!isReadOnly && (
-                                        <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotoBreakerAntenaS1Apagado')}>
-                                          <Ionicons name="close-circle" size={24} color={colors.danger} />
-                                        </TouchableOpacity>
-                                      )}
-                                    </View>
-                                  ) : !isReadOnly ? (
-                                    <TouchableOpacity style={styles.addPhotoLarge} onPress={() => handlePickImage('fotoBreakerAntenaS1Apagado')}>
-                                      <Ionicons name="camera" size={32} color="rgba(255,255,255,0.3)" />
-                                      <Text style={styles.addPhotoText}>Subir Foto</Text>
-                                    </TouchableOpacity>
-                                  ) : null}
-                                </View>
-
-                                {fotoBreakerAntenaS1Apagado !== '' && renderConsumoFinalFields('fotosConsumoFinalAntenaS1', fotosConsumoFinalAntenaS1, ampereConsumoFinalAntenaS1)}
-                              </View>
-                            )}
-                          </View>
-                        )}
-                      </View>
-                    )}
-
-                    {estadoAntenaSector1 === 'Apagada' && (
-                      <View style={{ gap: 12, marginTop: 12 }}>
                         <View style={styles.photoField}>
-                          <Text style={styles.label}>Foto de Breaker Antena S1 Apagado</Text>
-                          {fotoBreakerAntenaS1Apagado ? (
+                          <Text style={styles.label}>Consumo Inicial CC en Antena S1</Text>
+                          {fotoConsumoInicialCcAntenaS1 ? (
                             <View style={styles.photoFullContainer}>
-                              <TouchableOpacity onPress={() => setPreviewUri(fotoBreakerAntenaS1Apagado)}>
-                                <Image source={{ uri: fotoBreakerAntenaS1Apagado }} style={styles.photoFull} resizeMode="cover" />
+                              <TouchableOpacity onPress={() => setPreviewUri(fotoConsumoInicialCcAntenaS1)}>
+                                <Image source={{ uri: fotoConsumoInicialCcAntenaS1 }} style={styles.photoFull} resizeMode="cover" />
                               </TouchableOpacity>
                               {!isReadOnly && (
-                                <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotoBreakerAntenaS1Apagado')}>
+                                <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotoConsumoInicialCcAntenaS1')}>
                                   <Ionicons name="close-circle" size={24} color={colors.danger} />
                                 </TouchableOpacity>
                               )}
                             </View>
                           ) : !isReadOnly ? (
-                            <TouchableOpacity style={styles.addPhotoLarge} onPress={() => handlePickImage('fotoBreakerAntenaS1Apagado')}>
+                            <TouchableOpacity style={styles.addPhotoLarge} onPress={() => handlePickImage('fotoConsumoInicialCcAntenaS1')}>
                               <Ionicons name="camera" size={32} color="rgba(255,255,255,0.3)" />
                               <Text style={styles.addPhotoText}>Subir Foto</Text>
                             </TouchableOpacity>
                           ) : null}
+                        </View>
+
+                        {fotoBreakerAntenaS1Encendido !== '' && fotoConsumoInicialCcAntenaS1 !== '' && (
+                          !confirmadoApagadoAntenaS1 ? (
+                            <View style={styles.warningCard}>
+                              <Ionicons name="warning" size={32} color="#FF9500" style={{ marginBottom: 8 }} />
+                              <Text style={styles.warningCardText}>Registrar Consumo Final y luego retirar Baseband S1/S2/S3</Text>
+                              {!isReadOnly && (
+                                <TouchableOpacity style={styles.warningConfirmBtn} onPress={() => setConfirmadoApagadoAntenaS1(true)}>
+                                  <Text style={styles.warningConfirmBtnText}>Confirmar realización</Text>
+                                </TouchableOpacity>
+                              )}
+                            </View>
+                          ) : (
+                            <View style={styles.successBadge}>
+                              <Ionicons name="checkmark-circle" size={24} color="#34C759" />
+                              <Text style={styles.successBadgeText}>Realización confirmada</Text>
+                            </View>
+                          )
+                        )}
+
+                        {confirmadoApagadoAntenaS1 && (
+                          <View style={{ gap: 12 }}>
+                            <View style={styles.photoField}>
+                              <Text style={styles.label}>Foto de Breaker Antena S1 Apagado</Text>
+                              {fotoBreakerAntenaS1Apagado ? (
+                                <View style={styles.photoFullContainer}>
+                                  <TouchableOpacity onPress={() => setPreviewUri(fotoBreakerAntenaS1Apagado)}>
+                                    <Image source={{ uri: fotoBreakerAntenaS1Apagado }} style={styles.photoFull} resizeMode="cover" />
+                                  </TouchableOpacity>
+                                  {!isReadOnly && (
+                                    <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotoBreakerAntenaS1Apagado')}>
+                                      <Ionicons name="close-circle" size={24} color={colors.danger} />
+                                    </TouchableOpacity>
+                                  )}
+                                </View>
+                              ) : !isReadOnly ? (
+                                <TouchableOpacity style={styles.addPhotoLarge} onPress={() => handlePickImage('fotoBreakerAntenaS1Apagado')}>
+                                  <Ionicons name="camera" size={32} color="rgba(255,255,255,0.3)" />
+                                  <Text style={styles.addPhotoText}>Subir Foto</Text>
+                                </TouchableOpacity>
+                              ) : null}
+                            </View>
+
+                            <View style={styles.photoField}>
+                              <Text style={styles.label}>Consumo Final CC en Antena S1</Text>
+                              {fotoConsumoFinalCcAntenaS1 ? (
+                                <View style={styles.photoFullContainer}>
+                                  <TouchableOpacity onPress={() => setPreviewUri(fotoConsumoFinalCcAntenaS1)}>
+                                    <Image source={{ uri: fotoConsumoFinalCcAntenaS1 }} style={styles.photoFull} resizeMode="cover" />
+                                  </TouchableOpacity>
+                                  {!isReadOnly && (
+                                    <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotoConsumoFinalCcAntenaS1')}>
+                                      <Ionicons name="close-circle" size={24} color={colors.danger} />
+                                    </TouchableOpacity>
+                                  )}
+                                </View>
+                              ) : !isReadOnly ? (
+                                <TouchableOpacity style={styles.addPhotoLarge} onPress={() => handlePickImage('fotoConsumoFinalCcAntenaS1')}>
+                                  <Ionicons name="camera" size={32} color="rgba(255,255,255,0.3)" />
+                                  <Text style={styles.addPhotoText}>Subir Foto</Text>
+                                </TouchableOpacity>
+                              ) : null}
+                            </View>
+                          </View>
+                        )}
+                      </View>
+                    )}
+
+                    {seApagaraAntenaS1 === 'No' && (
+                      <View style={{ gap: 12, marginTop: 12 }}>
+                        <View style={styles.warningCard}>
+                          <Ionicons name="information-circle" size={32} color="#0A84FF" style={{ marginBottom: 8 }} />
+                          <Text style={styles.warningCardText}>Compartida con 5G</Text>
                         </View>
                       </View>
                     )}
@@ -4654,18 +6079,18 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
                 <View>
                   <View style={styles.formSection}>
                     <SelectDropdown
-                      label="Estado Antena Sector 2"
-                      value={estadoAntenaSector2}
+                      label="¿Se apagará Antena del Sector 2?"
+                      value={seApagaraAntenaS2}
                       options={[
-                        { id: 'Encendida', label: 'Encendida' },
-                        { id: 'Apagada', label: 'Apagada' },
+                        { id: 'Si', label: 'Si' },
+                        { id: 'No', label: 'No' },
                         { id: 'N/A', label: 'N/A' },
                       ]}
-                      onSelect={handleEstadoAntenaSector2Change}
+                      onSelect={handleSeApagaraAntenaS2Change}
                       disabled={isReadOnly}
                     />
 
-                    {estadoAntenaSector2 === 'Encendida' && (
+                    {seApagaraAntenaS2 === 'Si' && (
                       <View style={{ gap: 12, marginTop: 12 }}>
                         <View style={styles.photoField}>
                           <Text style={styles.label}>Foto de Breaker Antena S2 Encendido</Text>
@@ -4688,68 +6113,99 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
                           ) : null}
                         </View>
 
-                        {fotoBreakerAntenaS2Encendido !== '' && (
-                          <View style={{ gap: 12 }}>
-                            <SelectDropdown
-                              label="¿Se apagará Antena del Sector 2?"
-                              value={seApagaraAntenaS2}
-                              options={siNoOptions}
-                              onSelect={setSeApagaraAntenaS2}
-                              disabled={isReadOnly}
-                            />
-
-                            {seApagaraAntenaS2 === 'Si' && (
-                              <View style={{ gap: 12 }}>
-                                <View style={styles.photoField}>
-                                  <Text style={styles.label}>Foto de Breaker Antena S2 Apagado</Text>
-                                  {fotoBreakerAntenaS2Apagado ? (
-                                    <View style={styles.photoFullContainer}>
-                                      <TouchableOpacity onPress={() => setPreviewUri(fotoBreakerAntenaS2Apagado)}>
-                                        <Image source={{ uri: fotoBreakerAntenaS2Apagado }} style={styles.photoFull} resizeMode="cover" />
-                                      </TouchableOpacity>
-                                      {!isReadOnly && (
-                                        <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotoBreakerAntenaS2Apagado')}>
-                                          <Ionicons name="close-circle" size={24} color={colors.danger} />
-                                        </TouchableOpacity>
-                                      )}
-                                    </View>
-                                  ) : !isReadOnly ? (
-                                    <TouchableOpacity style={styles.addPhotoLarge} onPress={() => handlePickImage('fotoBreakerAntenaS2Apagado')}>
-                                      <Ionicons name="camera" size={32} color="rgba(255,255,255,0.3)" />
-                                      <Text style={styles.addPhotoText}>Subir Foto</Text>
-                                    </TouchableOpacity>
-                                  ) : null}
-                                </View>
-
-                                {fotoBreakerAntenaS2Apagado !== '' && renderConsumoFinalFields('fotosConsumoFinalAntenaS2', fotosConsumoFinalAntenaS2, ampereConsumoFinalAntenaS2)}
-                              </View>
-                            )}
-                          </View>
-                        )}
-                      </View>
-                    )}
-
-                    {estadoAntenaSector2 === 'Apagada' && (
-                      <View style={{ gap: 12, marginTop: 12 }}>
                         <View style={styles.photoField}>
-                          <Text style={styles.label}>Foto de Breaker Antena S2 Apagado</Text>
-                          {fotoBreakerAntenaS2Apagado ? (
+                          <Text style={styles.label}>Consumo Inicial CC en Antena S2</Text>
+                          {fotoConsumoInicialCcAntenaS2 ? (
                             <View style={styles.photoFullContainer}>
-                              <TouchableOpacity onPress={() => setPreviewUri(fotoBreakerAntenaS2Apagado)}>
-                                <Image source={{ uri: fotoBreakerAntenaS2Apagado }} style={styles.photoFull} resizeMode="cover" />
+                              <TouchableOpacity onPress={() => setPreviewUri(fotoConsumoInicialCcAntenaS2)}>
+                                <Image source={{ uri: fotoConsumoInicialCcAntenaS2 }} style={styles.photoFull} resizeMode="cover" />
                               </TouchableOpacity>
                               {!isReadOnly && (
-                                <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotoBreakerAntenaS2Apagado')}>
+                                <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotoConsumoInicialCcAntenaS2')}>
                                   <Ionicons name="close-circle" size={24} color={colors.danger} />
                                 </TouchableOpacity>
                               )}
                             </View>
                           ) : !isReadOnly ? (
-                            <TouchableOpacity style={styles.addPhotoLarge} onPress={() => handlePickImage('fotoBreakerAntenaS2Apagado')}>
+                            <TouchableOpacity style={styles.addPhotoLarge} onPress={() => handlePickImage('fotoConsumoInicialCcAntenaS2')}>
                               <Ionicons name="camera" size={32} color="rgba(255,255,255,0.3)" />
                               <Text style={styles.addPhotoText}>Subir Foto</Text>
                             </TouchableOpacity>
                           ) : null}
+                        </View>
+
+                        {fotoBreakerAntenaS2Encendido !== '' && fotoConsumoInicialCcAntenaS2 !== '' && (
+                          !confirmadoApagadoAntenaS2 ? (
+                            <View style={styles.warningCard}>
+                              <Ionicons name="warning" size={32} color="#FF9500" style={{ marginBottom: 8 }} />
+                              <Text style={styles.warningCardText}>Registrar Consumo Final y luego retirar Baseband S1/S2/S3</Text>
+                              {!isReadOnly && (
+                                <TouchableOpacity style={styles.warningConfirmBtn} onPress={() => setConfirmadoApagadoAntenaS2(true)}>
+                                  <Text style={styles.warningConfirmBtnText}>Confirmar realización</Text>
+                                </TouchableOpacity>
+                              )}
+                            </View>
+                          ) : (
+                            <View style={styles.successBadge}>
+                              <Ionicons name="checkmark-circle" size={24} color="#34C759" />
+                              <Text style={styles.successBadgeText}>Realización confirmada</Text>
+                            </View>
+                          )
+                        )}
+
+                        {confirmadoApagadoAntenaS2 && (
+                          <View style={{ gap: 12 }}>
+                            <View style={styles.photoField}>
+                              <Text style={styles.label}>Foto de Breaker Antena S2 Apagado</Text>
+                              {fotoBreakerAntenaS2Apagado ? (
+                                <View style={styles.photoFullContainer}>
+                                  <TouchableOpacity onPress={() => setPreviewUri(fotoBreakerAntenaS2Apagado)}>
+                                    <Image source={{ uri: fotoBreakerAntenaS2Apagado }} style={styles.photoFull} resizeMode="cover" />
+                                  </TouchableOpacity>
+                                  {!isReadOnly && (
+                                    <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotoBreakerAntenaS2Apagado')}>
+                                      <Ionicons name="close-circle" size={24} color={colors.danger} />
+                                    </TouchableOpacity>
+                                  )}
+                                </View>
+                              ) : !isReadOnly ? (
+                                <TouchableOpacity style={styles.addPhotoLarge} onPress={() => handlePickImage('fotoBreakerAntenaS2Apagado')}>
+                                  <Ionicons name="camera" size={32} color="rgba(255,255,255,0.3)" />
+                                  <Text style={styles.addPhotoText}>Subir Foto</Text>
+                                </TouchableOpacity>
+                              ) : null}
+                            </View>
+
+                            <View style={styles.photoField}>
+                              <Text style={styles.label}>Consumo Final CC en Antena S2</Text>
+                              {fotoConsumoFinalCcAntenaS2 ? (
+                                <View style={styles.photoFullContainer}>
+                                  <TouchableOpacity onPress={() => setPreviewUri(fotoConsumoFinalCcAntenaS2)}>
+                                    <Image source={{ uri: fotoConsumoFinalCcAntenaS2 }} style={styles.photoFull} resizeMode="cover" />
+                                  </TouchableOpacity>
+                                  {!isReadOnly && (
+                                    <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotoConsumoFinalCcAntenaS2')}>
+                                      <Ionicons name="close-circle" size={24} color={colors.danger} />
+                                    </TouchableOpacity>
+                                  )}
+                                </View>
+                              ) : !isReadOnly ? (
+                                <TouchableOpacity style={styles.addPhotoLarge} onPress={() => handlePickImage('fotoConsumoFinalCcAntenaS2')}>
+                                  <Ionicons name="camera" size={32} color="rgba(255,255,255,0.3)" />
+                                  <Text style={styles.addPhotoText}>Subir Foto</Text>
+                                </TouchableOpacity>
+                              ) : null}
+                            </View>
+                          </View>
+                        )}
+                      </View>
+                    )}
+
+                    {seApagaraAntenaS2 === 'No' && (
+                      <View style={{ gap: 12, marginTop: 12 }}>
+                        <View style={styles.warningCard}>
+                          <Ionicons name="information-circle" size={32} color="#0A84FF" style={{ marginBottom: 8 }} />
+                          <Text style={styles.warningCardText}>Compartida con 5G</Text>
                         </View>
                       </View>
                     )}
@@ -4761,18 +6217,18 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
                 <View>
                   <View style={styles.formSection}>
                     <SelectDropdown
-                      label="Estado Antena Sector 3"
-                      value={estadoAntenaSector3}
+                      label="¿Se apagará Antena del Sector 3?"
+                      value={seApagaraAntenaS3}
                       options={[
-                        { id: 'Encendida', label: 'Encendida' },
-                        { id: 'Apagada', label: 'Apagada' },
+                        { id: 'Si', label: 'Si' },
+                        { id: 'No', label: 'No' },
                         { id: 'N/A', label: 'N/A' },
                       ]}
-                      onSelect={handleEstadoAntenaSector3Change}
+                      onSelect={handleSeApagaraAntenaS3Change}
                       disabled={isReadOnly}
                     />
 
-                    {estadoAntenaSector3 === 'Encendida' && (
+                    {seApagaraAntenaS3 === 'Si' && (
                       <View style={{ gap: 12, marginTop: 12 }}>
                         <View style={styles.photoField}>
                           <Text style={styles.label}>Foto de Breaker Antena S3 Encendido</Text>
@@ -4795,68 +6251,99 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
                           ) : null}
                         </View>
 
-                        {fotoBreakerAntenaS3Encendido !== '' && (
-                          <View style={{ gap: 12 }}>
-                            <SelectDropdown
-                              label="¿Se apagará Antena del Sector 3?"
-                              value={seApagaraAntenaS3}
-                              options={siNoOptions}
-                              onSelect={setSeApagaraAntenaS3}
-                              disabled={isReadOnly}
-                            />
-
-                            {seApagaraAntenaS3 === 'Si' && (
-                              <View style={{ gap: 12 }}>
-                                <View style={styles.photoField}>
-                                  <Text style={styles.label}>Foto de Breaker Antena S3 Apagado</Text>
-                                  {fotoBreakerAntenaS3Apagado ? (
-                                    <View style={styles.photoFullContainer}>
-                                      <TouchableOpacity onPress={() => setPreviewUri(fotoBreakerAntenaS3Apagado)}>
-                                        <Image source={{ uri: fotoBreakerAntenaS3Apagado }} style={styles.photoFull} resizeMode="cover" />
-                                      </TouchableOpacity>
-                                      {!isReadOnly && (
-                                        <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotoBreakerAntenaS3Apagado')}>
-                                          <Ionicons name="close-circle" size={24} color={colors.danger} />
-                                        </TouchableOpacity>
-                                      )}
-                                    </View>
-                                  ) : !isReadOnly ? (
-                                    <TouchableOpacity style={styles.addPhotoLarge} onPress={() => handlePickImage('fotoBreakerAntenaS3Apagado')}>
-                                      <Ionicons name="camera" size={32} color="rgba(255,255,255,0.3)" />
-                                      <Text style={styles.addPhotoText}>Subir Foto</Text>
-                                    </TouchableOpacity>
-                                  ) : null}
-                                </View>
-
-                                {fotoBreakerAntenaS3Apagado !== '' && renderConsumoFinalFields('fotosConsumoFinalAntenaS3', fotosConsumoFinalAntenaS3, ampereConsumoFinalAntenaS3)}
-                              </View>
-                            )}
-                          </View>
-                        )}
-                      </View>
-                    )}
-
-                    {estadoAntenaSector3 === 'Apagada' && (
-                      <View style={{ gap: 12, marginTop: 12 }}>
                         <View style={styles.photoField}>
-                          <Text style={styles.label}>Foto de Breaker Antena S3 Apagado</Text>
-                          {fotoBreakerAntenaS3Apagado ? (
+                          <Text style={styles.label}>Consumo Inicial CC en Antena S3</Text>
+                          {fotoConsumoInicialCcAntenaS3 ? (
                             <View style={styles.photoFullContainer}>
-                              <TouchableOpacity onPress={() => setPreviewUri(fotoBreakerAntenaS3Apagado)}>
-                                <Image source={{ uri: fotoBreakerAntenaS3Apagado }} style={styles.photoFull} resizeMode="cover" />
+                              <TouchableOpacity onPress={() => setPreviewUri(fotoConsumoInicialCcAntenaS3)}>
+                                <Image source={{ uri: fotoConsumoInicialCcAntenaS3 }} style={styles.photoFull} resizeMode="cover" />
                               </TouchableOpacity>
                               {!isReadOnly && (
-                                <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotoBreakerAntenaS3Apagado')}>
+                                <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotoConsumoInicialCcAntenaS3')}>
                                   <Ionicons name="close-circle" size={24} color={colors.danger} />
                                 </TouchableOpacity>
                               )}
                             </View>
                           ) : !isReadOnly ? (
-                            <TouchableOpacity style={styles.addPhotoLarge} onPress={() => handlePickImage('fotoBreakerAntenaS3Apagado')}>
+                            <TouchableOpacity style={styles.addPhotoLarge} onPress={() => handlePickImage('fotoConsumoInicialCcAntenaS3')}>
                               <Ionicons name="camera" size={32} color="rgba(255,255,255,0.3)" />
                               <Text style={styles.addPhotoText}>Subir Foto</Text>
                             </TouchableOpacity>
                           ) : null}
+                        </View>
+
+                        {fotoBreakerAntenaS3Encendido !== '' && fotoConsumoInicialCcAntenaS3 !== '' && (
+                          !confirmadoApagadoAntenaS3 ? (
+                            <View style={styles.warningCard}>
+                              <Ionicons name="warning" size={32} color="#FF9500" style={{ marginBottom: 8 }} />
+                              <Text style={styles.warningCardText}>Registrar Consumo Final y luego retirar Baseband S1/S2/S3</Text>
+                              {!isReadOnly && (
+                                <TouchableOpacity style={styles.warningConfirmBtn} onPress={() => setConfirmadoApagadoAntenaS3(true)}>
+                                  <Text style={styles.warningConfirmBtnText}>Confirmar realización</Text>
+                                </TouchableOpacity>
+                              )}
+                            </View>
+                          ) : (
+                            <View style={styles.successBadge}>
+                              <Ionicons name="checkmark-circle" size={24} color="#34C759" />
+                              <Text style={styles.successBadgeText}>Realización confirmada</Text>
+                            </View>
+                          )
+                        )}
+
+                        {confirmadoApagadoAntenaS3 && (
+                          <View style={{ gap: 12 }}>
+                            <View style={styles.photoField}>
+                              <Text style={styles.label}>Foto de Breaker Antena S3 Apagado</Text>
+                              {fotoBreakerAntenaS3Apagado ? (
+                                <View style={styles.photoFullContainer}>
+                                  <TouchableOpacity onPress={() => setPreviewUri(fotoBreakerAntenaS3Apagado)}>
+                                    <Image source={{ uri: fotoBreakerAntenaS3Apagado }} style={styles.photoFull} resizeMode="cover" />
+                                  </TouchableOpacity>
+                                  {!isReadOnly && (
+                                    <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotoBreakerAntenaS3Apagado')}>
+                                      <Ionicons name="close-circle" size={24} color={colors.danger} />
+                                    </TouchableOpacity>
+                                  )}
+                                </View>
+                              ) : !isReadOnly ? (
+                                <TouchableOpacity style={styles.addPhotoLarge} onPress={() => handlePickImage('fotoBreakerAntenaS3Apagado')}>
+                                  <Ionicons name="camera" size={32} color="rgba(255,255,255,0.3)" />
+                                  <Text style={styles.addPhotoText}>Subir Foto</Text>
+                                </TouchableOpacity>
+                              ) : null}
+                            </View>
+
+                            <View style={styles.photoField}>
+                              <Text style={styles.label}>Consumo Final CC en Antena S3</Text>
+                              {fotoConsumoFinalCcAntenaS3 ? (
+                                <View style={styles.photoFullContainer}>
+                                  <TouchableOpacity onPress={() => setPreviewUri(fotoConsumoFinalCcAntenaS3)}>
+                                    <Image source={{ uri: fotoConsumoFinalCcAntenaS3 }} style={styles.photoFull} resizeMode="cover" />
+                                  </TouchableOpacity>
+                                  {!isReadOnly && (
+                                    <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto('fotoConsumoFinalCcAntenaS3')}>
+                                      <Ionicons name="close-circle" size={24} color={colors.danger} />
+                                    </TouchableOpacity>
+                                  )}
+                                </View>
+                              ) : !isReadOnly ? (
+                                <TouchableOpacity style={styles.addPhotoLarge} onPress={() => handlePickImage('fotoConsumoFinalCcAntenaS3')}>
+                                  <Ionicons name="camera" size={32} color="rgba(255,255,255,0.3)" />
+                                  <Text style={styles.addPhotoText}>Subir Foto</Text>
+                                </TouchableOpacity>
+                              ) : null}
+                            </View>
+                          </View>
+                        )}
+                      </View>
+                    )}
+
+                    {seApagaraAntenaS3 === 'No' && (
+                      <View style={{ gap: 12, marginTop: 12 }}>
+                        <View style={styles.warningCard}>
+                          <Ionicons name="information-circle" size={32} color="#0A84FF" style={{ marginBottom: 8 }} />
+                          <Text style={styles.warningCardText}>Compartida con 5G</Text>
                         </View>
                       </View>
                     )}
@@ -4864,30 +6351,47 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
                 </View>
               )}
             </ScrollView>
-            {(activeFolder === 'datos' || activeFolder === 'apagado' || activeFolder === 'bafiS2' || activeFolder === 'bafiS3' || activeFolder === 'antenaS1' || activeFolder === 'antenaS2' || activeFolder === 'antenaS3' || activeFolder === 'alarmasExternas' || activeFolder === 'evidenciaSalida') && (
+            {(activeFolder === 'datos' || activeFolder === 'apagado' || activeFolder === 'bafiS2' || activeFolder === 'bafiS3' || activeFolder === 'antenaS1' || activeFolder === 'antenaS2' || activeFolder === 'antenaS3' || activeFolder === 'alarmasExternas' || activeFolder === 'evidenciaSalida' || activeFolder === 'hallazgos') && (
               <View style={styles.stickyBottomContainer}>
-                <View style={styles.progressRow}>
-                  <View style={styles.sectionProgressBarBg}>
-                    <View style={[
-                      styles.sectionProgressBarFill, 
-                      { 
-                        width: `${getCurrentFolderProgress()}%`, 
-                        backgroundColor: getProgressColor(getCurrentFolderProgress()) 
-                      }
-                    ]} />
+                {!isReadOnly && activeFolder !== 'hallazgos' && (
+                  <View style={styles.progressRow}>
+                    <View style={styles.sectionProgressBarBg}>
+                      <View style={[
+                        styles.sectionProgressBarFill, 
+                        { 
+                          width: `${getCurrentFolderProgress()}%`, 
+                          backgroundColor: getProgressColor(getCurrentFolderProgress()) 
+                        }
+                      ]} />
+                    </View>
+                    <Text style={styles.sectionProgressPercent}>
+                      {getCurrentFolderProgress()}%
+                    </Text>
                   </View>
-                  <Text style={styles.sectionProgressPercent}>
-                    {getCurrentFolderProgress()}%
-                  </Text>
-                </View>
+                )}
                 
-                {getCurrentFolderProgress() === 100 && (
+                {(isReadOnly || getCurrentFolderProgress() === 100 || (activeFolder === 'hallazgos' && fotos.length > 0)) && (
                   <TouchableOpacity 
-                    style={styles.stickyFinalizeBtn} 
+                    style={[
+                      styles.stickyFinalizeBtn,
+                      isReadOnly && { 
+                        backgroundColor: 'rgba(255,255,255,0.15)', 
+                        borderWidth: 1, 
+                        borderColor: 'rgba(255,255,255,0.3)',
+                        elevation: 0,
+                        shadowOpacity: 0
+                      }
+                    ]} 
                     onPress={handleBackToDashboard}
                     activeOpacity={0.8}
                   >
-                    <Text style={styles.stickyFinalizeText}>Finalizar Apartado</Text>
+                    <Ionicons 
+                      name={isReadOnly ? 'arrow-back' : 'checkmark-circle'} 
+                      size={18} 
+                      color="#fff" 
+                      style={{ marginRight: 6 }} 
+                    />
+                    <Text style={styles.stickyFinalizeText}>{isReadOnly ? 'Volver al Menú' : 'Finalizar Apartado'}</Text>
                   </TouchableOpacity>
                 )}
               </View>
@@ -5230,6 +6734,12 @@ export const DetalleActividadScreen = ({ route, navigation }: any) => {
             </View>
           </View>
       )}
+      {/* Modal de Progreso de Subida */}
+      <UploadProgressModal
+        visible={uploadVisible}
+        progress={uploadProgress}
+        statusMessage={uploadStatus}
+      />
     </View>
   </SafeAreaView>
   );
@@ -5777,8 +7287,8 @@ const styles = StyleSheet.create({
   },
   photoThumbContainer: {
     position: 'relative',
-    width: (SCREEN_WIDTH - 80) / 3,
-    aspectRatio: 1,
+    width: (SCREEN_WIDTH - 104) / 3,
+    height: (SCREEN_WIDTH - 104) / 3,
   },
   photoThumb: {
     width: '100%',
@@ -5795,8 +7305,19 @@ const styles = StyleSheet.create({
     padding: 2,
   },
   addPhotoBox: {
-    width: (SCREEN_WIDTH - 80) / 3,
-    aspectRatio: 1,
+    width: (SCREEN_WIDTH - 104) / 3,
+    height: (SCREEN_WIDTH - 104) / 3,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+    borderStyle: 'dashed',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  addPhotoBox2Col: {
+    width: '100%',
+    height: '100%',
     backgroundColor: 'rgba(255, 255, 255, 0.05)',
     borderRadius: 12,
     borderWidth: 1,
@@ -6190,6 +7711,8 @@ const styles = StyleSheet.create({
     paddingVertical: 16,
     borderRadius: 16,
     alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
     marginTop: 12,
     shadowColor: colors.success,
     shadowOffset: { width: 0, height: 4 },

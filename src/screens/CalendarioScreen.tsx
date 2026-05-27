@@ -5,7 +5,7 @@ import { Calendar, LocaleConfig } from 'react-native-calendars';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../theme/colors';
 import { AppContext } from '../context/AppContext';
-import { getElapsedTime, formatTime } from '../services/timeUtils';
+import { getElapsedTime, formatTime, getSantiagoTodayString } from '../services/timeUtils';
 import { SelectDropdown } from '../components/SelectDropdown';
 
 const { height: screenHeight, width: screenWidth } = Dimensions.get('window');
@@ -29,9 +29,14 @@ export const CalendarioScreen = ({ navigation }: any) => {
   const allPlannings = context?.plannings || [];
   const allSites = context?.sites || [];
   const allUsers = context?.users || [];
+  
+  const notifications = context?.notifications || [];
+  const unreadNotificationsCount = context?.unreadNotificationsCount || 0;
+  const markNotificationAsRead = context?.markNotificationAsRead;
+  const markAllNotificationsAsRead = context?.markAllNotificationsAsRead;
+  const deleteNotification = context?.deleteNotification;
 
-  const today = new Date();
-  const todayString = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+  const todayString = getSantiagoTodayString();
   const [selectedDate, setSelectedDate] = useState(todayString);
 
   const [tick, setTick] = useState(0);
@@ -108,8 +113,10 @@ export const CalendarioScreen = ({ navigation }: any) => {
   });
 
   const [selectedProject, setSelectedProject] = useState<string | null>(null);
+  const [selectedStatus, setSelectedStatus] = useState<string | null>(null);
 
   const [isPlanningModalVisible, setIsPlanningModalVisible] = useState(false);
+  const [isNotificationsModalVisible, setIsNotificationsModalVisible] = useState(false);
   const [modalSelectedProject, setModalSelectedProject] = useState<string | null>(null);
   const [modalSelectedSite, setModalSelectedSite] = useState<string | null>(null);
   const [modalSelectedWorker, setModalSelectedWorker] = useState<string | null>(null);
@@ -117,7 +124,8 @@ export const CalendarioScreen = ({ navigation }: any) => {
   const modalSiteOptions = allSites
     .filter(s => {
       const isEjecutado = s.estadoExcel === 'Ejecutado' || allPlannings.some(p => p.siteId === s.id && p.status === 'Ejecutado');
-      if (isEjecutado) return false;
+      const isEnEjecucion = s.estadoExcel === 'En ejecución' || allPlannings.some(p => p.siteId === s.id && p.status === 'En ejecución');
+      if (isEjecutado || isEnEjecucion) return false;
       return !modalSelectedProject || s.proyecto === modalSelectedProject;
     })
     .map(s => ({ id: s.id, label: `${s.code} - ${s.name}` }));
@@ -138,9 +146,41 @@ export const CalendarioScreen = ({ navigation }: any) => {
       return;
     }
 
+    if (selectedDate < todayString) {
+      Alert.alert('Restricción', 'No puedes planificar o replanificar para una fecha anterior a la de hoy.');
+      return;
+    }
+
     const existingPlanning = allPlannings.find(p => p.siteId === modalSelectedSite && p.date === selectedDate);
     if (existingPlanning) {
-      Alert.alert('Sitio ya planificado', 'Este sitio ya está planificado para este día.');
+      if (existingPlanning.workerId !== modalSelectedWorker) {
+        const resetFields = {
+          startTime: null,
+          endTime: null,
+          datosGenerales: null,
+          hallazgos: null,
+          evidenciaSalida: null,
+          apagado3G: null,
+          apagadoBAFI: null,
+          apagadoAntenaSector1: null,
+          apagadoAntenaSector2: null,
+          apagadoAntenaSector3: null,
+          configurarRETU: null,
+          cambioChapa: null,
+        };
+        context?.updatePlanning(existingPlanning.id, {
+          workerId: modalSelectedWorker,
+          status: 'Planificado',
+          ...resetFields
+        } as any);
+        setModalSelectedProject(null);
+        setModalSelectedSite(null);
+        setModalSelectedWorker(null);
+        setIsPlanningModalVisible(false);
+        Alert.alert('Éxito', 'Planificación actualizada correctamente.');
+        return;
+      }
+      Alert.alert('Sitio ya planificado', 'Este sitio ya está planificado para este día con el mismo trabajador.');
       return;
     }
 
@@ -164,8 +204,16 @@ export const CalendarioScreen = ({ navigation }: any) => {
       .filter((p): p is string => !!p)
   ));
   const projectOptions = [
-    { id: 'Todos', label: 'Todos los Proyectos' },
+    { id: 'Todos', label: 'Todos' },
     ...projectsList.map(p => ({ id: p, label: p }))
+  ];
+
+  const statusOptions = [
+    { id: 'Todos', label: 'Todos' },
+    { id: 'Planificado', label: 'Planificado' },
+    { id: 'En ejecución', label: 'En ejecución' },
+    { id: 'Ejecutado', label: 'Ejecutado' },
+    { id: 'Pospuesto', label: 'Pospuesto' },
   ];
 
   // Filtrar planificaciones
@@ -177,6 +225,9 @@ export const CalendarioScreen = ({ navigation }: any) => {
       const site = allSites.find(s => s.id === p.siteId);
       if (!site) return false;
       if (selectedProject && selectedProject !== 'Todos' && site.proyecto !== selectedProject) {
+        return false;
+      }
+      if (selectedStatus && selectedStatus !== 'Todos' && p.status !== selectedStatus) {
         return false;
       }
     }
@@ -275,27 +326,59 @@ export const CalendarioScreen = ({ navigation }: any) => {
           <View>
             <Text style={styles.headerTitle}>Actividades del día</Text>
             <Text style={styles.headerSubtitle}>{selectedDate}</Text>
+            {currentUser?.role !== 'Trabajador' && (
+              <TouchableOpacity 
+                style={styles.newPlanningTextButton} 
+                onPress={() => {
+                  if (selectedDate < todayString) {
+                    Alert.alert('Restricción', 'No puedes planificar visitas para fechas anteriores a hoy.');
+                    return;
+                  }
+                  setIsPlanningModalVisible(true);
+                }}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="add" size={16} color="#fff" style={{ marginRight: 6 }} />
+                <Text style={styles.newPlanningTextButtonText}>Nueva Planificación</Text>
+              </TouchableOpacity>
+            )}
           </View>
-          {currentUser?.role !== 'Trabajador' && (
+          <View style={{ flexDirection: 'row', gap: 10, alignItems: 'center' }}>
             <TouchableOpacity 
-              style={styles.addButton} 
-              onPress={() => setIsPlanningModalVisible(true)}
+              style={styles.notificationButton} 
+              onPress={() => setIsNotificationsModalVisible(true)}
               activeOpacity={0.7}
             >
-              <Ionicons name="add" size={24} color="#fff" />
+              <Ionicons name="notifications" size={24} color="#fff" />
+              {unreadNotificationsCount > 0 && (
+                <View style={styles.notificationBadge}>
+                  <Text style={styles.notificationBadgeText}>{unreadNotificationsCount}</Text>
+                </View>
+              )}
             </TouchableOpacity>
-          )}
+          </View>
         </View>
 
         {currentUser?.role !== 'Trabajador' && (
-          <View style={{ marginBottom: 15 }}>
-            <SelectDropdown
-              label="Filtrar por Proyecto"
-              value={selectedProject}
-              options={projectOptions}
-              onSelect={setSelectedProject}
-              placeholder="Todos los Proyectos"
-            />
+          <View style={styles.filtersRow}>
+            <View style={styles.filterWrapper}>
+              <SelectDropdown
+                label="Proyecto"
+                value={selectedProject}
+                options={projectOptions}
+                onSelect={setSelectedProject}
+                placeholder="Todos"
+              />
+            </View>
+            <View style={styles.filterWrapper}>
+              <SelectDropdown
+                label="Estado"
+                value={selectedStatus}
+                options={statusOptions}
+                onSelect={setSelectedStatus}
+                placeholder="Todos"
+              />
+            </View>
           </View>
         )}
         
@@ -323,7 +406,7 @@ export const CalendarioScreen = ({ navigation }: any) => {
         <Animated.View style={[styles.sheetContent, { opacity: contentOpacity }]}>
           <Calendar
             current={selectedDate}
-            minDate={todayString}
+            minDate={currentUser?.role === 'Trabajador' ? todayString : undefined}
             onDayPress={(day: any) => setSelectedDate(day.dateString)}
             markedDates={markedDates}
             theme={{
@@ -379,6 +462,7 @@ export const CalendarioScreen = ({ navigation }: any) => {
                 onSelect={modalSelectedProject ? setModalSelectedSite : () => {}}
                 placeholder={modalSelectedProject ? "Elegir sitio..." : "Selecciona primero un proyecto"}
                 disabled={!modalSelectedProject}
+                searchable={true}
               />
 
               <SelectDropdown 
@@ -387,6 +471,7 @@ export const CalendarioScreen = ({ navigation }: any) => {
                 options={modalWorkerOptions}
                 onSelect={setModalSelectedWorker}
                 placeholder="Elegir trabajador..."
+                searchable={true}
               />
 
               <View style={styles.modalActions}>
@@ -412,6 +497,122 @@ export const CalendarioScreen = ({ navigation }: any) => {
                 </TouchableOpacity>
               </View>
             </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Modal de Notificaciones */}
+      <Modal
+        visible={isNotificationsModalVisible}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setIsNotificationsModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                <Ionicons name="notifications" size={24} color="#0A84FF" />
+                <Text style={styles.modalTitle}>Notificaciones</Text>
+              </View>
+              <TouchableOpacity 
+                style={[styles.closeBtn, { position: 'absolute', top: 14, right: 20 }]} 
+                onPress={() => setIsNotificationsModalVisible(false)}
+              >
+                <Ionicons name="close" size={24} color="rgba(255, 255, 255, 0.6)" />
+              </TouchableOpacity>
+            </View>
+
+            {notifications.length > 0 && (
+              <TouchableOpacity 
+                style={styles.markAllReadBtn}
+                onPress={() => markAllNotificationsAsRead?.()}
+              >
+                <Ionicons name="checkmark-done" size={16} color="#0A84FF" />
+                <Text style={styles.markAllReadText}>Marcar todas como leídas</Text>
+              </TouchableOpacity>
+            )}
+
+            <FlatList
+              data={notifications}
+              keyExtractor={item => item.id.toString()}
+              renderItem={({ item }) => {
+                const isUnread = !item.is_read;
+                const formattedDate = new Date(item.created_at).toLocaleString('es-CL', {
+                  day: '2-digit',
+                  month: '2-digit',
+                  hour: '2-digit',
+                  minute: '2-digit',
+                });
+
+                return (
+                  <View
+                    style={[styles.notificationItem, isUnread && styles.notificationItemUnread]}
+                  >
+                    <TouchableOpacity
+                      style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }}
+                      onPress={() => {
+                        if (isUnread) {
+                          markNotificationAsRead?.(item.id);
+                        }
+                        setIsNotificationsModalVisible(false);
+                        const targetSiteId = item.site_id || context?.plannings.find(p => p.id === item.planning_id)?.siteId;
+                        if (targetSiteId) {
+                          navigation.navigate('Actividad', { autoSelectSiteId: targetSiteId });
+                        }
+                      }}
+                    >
+                      <View style={styles.notificationIconCol}>
+                        <View style={[
+                          styles.notificationIconBg,
+                          { 
+                            backgroundColor: item.type === 'planning_reopened' 
+                              ? 'rgba(255, 69, 58, 0.15)' 
+                              : item.type === 'planning_executed'
+                              ? 'rgba(48, 209, 88, 0.15)'
+                              : 'rgba(10, 132, 255, 0.15)' 
+                          }
+                        ]}>
+                          <Ionicons 
+                            name={
+                              item.type === 'planning_reopened' ? 'refresh' :
+                              item.type === 'planning_executed' ? 'checkmark-done-circle' :
+                              'calendar'
+                            } 
+                            size={20} 
+                            color={
+                              item.type === 'planning_reopened' ? '#FF453A' :
+                              item.type === 'planning_executed' ? '#30D158' :
+                              '#0A84FF'
+                            } 
+                          />
+                        </View>
+                      </View>
+                      <View style={styles.notificationTextCol}>
+                        <Text style={[styles.notificationMsg, isUnread && styles.notificationMsgUnread]}>
+                          {item.message}
+                        </Text>
+                        <Text style={styles.notificationTime}>{formattedDate}</Text>
+                      </View>
+                      {isUnread && <View style={styles.unreadIndicatorDot} />}
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={{ padding: 8, marginLeft: 8 }}
+                      onPress={() => deleteNotification?.(item.id)}
+                    >
+                      <Ionicons name="trash-outline" size={20} color="rgba(255, 69, 58, 0.65)" />
+                    </TouchableOpacity>
+                  </View>
+                );
+              }}
+              contentContainerStyle={styles.notificationsListContent}
+              ListEmptyComponent={
+                <View style={styles.emptyNotificationsContainer}>
+                  <Ionicons name="notifications-off-outline" size={48} color="rgba(255, 255, 255, 0.15)" />
+                  <Text style={styles.emptyNotificationsText}>No tienes notificaciones por ahora.</Text>
+                </View>
+              }
+            />
           </View>
         </View>
       </Modal>
@@ -561,7 +762,7 @@ const styles = StyleSheet.create({
   },
   bottomSheet: {
     position: 'absolute',
-    bottom: 15,
+    bottom: Platform.OS === 'android' ? 50 : 15,
     left: 15,
     right: 15,
     backgroundColor: 'rgba(28, 28, 30, 0.95)',
@@ -593,6 +794,145 @@ const styles = StyleSheet.create({
   },
   sheetContent: {
     paddingHorizontal: 10,
-    paddingBottom: Platform.OS === 'android' ? 100 : 85,
+    paddingBottom: 85,
+  },
+  filtersRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 15,
+  },
+  filterWrapper: {
+    flex: 1,
+  },
+  notificationButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+    marginRight: 15,
+  },
+  notificationBadge: {
+    position: 'absolute',
+    top: -2,
+    right: -2,
+    backgroundColor: '#FF453A',
+    borderRadius: 9,
+    minWidth: 18,
+    height: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 4,
+    borderWidth: 1.5,
+    borderColor: '#000',
+  },
+  notificationBadgeText: {
+    color: '#fff',
+    fontSize: 9,
+    fontWeight: 'bold',
+  },
+  closeBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  markAllReadBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-end',
+    marginRight: 20,
+    marginVertical: 10,
+    gap: 6,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    backgroundColor: 'rgba(10, 132, 255, 0.08)',
+  },
+  markAllReadText: {
+    color: '#0A84FF',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  notificationItem: {
+    flexDirection: 'row',
+    padding: 16,
+    borderBottomWidth: 0.5,
+    borderBottomColor: 'rgba(255, 255, 255, 0.06)',
+    alignItems: 'center',
+    position: 'relative',
+  },
+  notificationItemUnread: {
+    backgroundColor: 'rgba(10, 132, 255, 0.03)',
+  },
+  notificationIconCol: {
+    marginRight: 14,
+  },
+  notificationIconBg: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  notificationTextCol: {
+    flex: 1,
+  },
+  notificationMsg: {
+    fontSize: 14.5,
+    color: 'rgba(255, 255, 255, 0.75)',
+    lineHeight: 20,
+  },
+  notificationMsgUnread: {
+    color: '#ffffff',
+    fontWeight: '500',
+  },
+  notificationTime: {
+    fontSize: 11.5,
+    color: 'rgba(255, 255, 255, 0.4)',
+    marginTop: 5,
+  },
+  unreadIndicatorDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#0A84FF',
+    position: 'absolute',
+    right: 16,
+    top: '50%',
+    marginTop: -4,
+  },
+  notificationsListContent: {
+    paddingBottom: 40,
+  },
+  emptyNotificationsContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 80,
+    gap: 15,
+  },
+  emptyNotificationsText: {
+    color: 'rgba(255, 255, 255, 0.35)',
+    fontSize: 14,
+    textAlign: 'center',
+  },
+  newPlanningTextButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#0A84FF',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    marginTop: 10,
+    alignSelf: 'flex-start',
+  },
+  newPlanningTextButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: 'bold',
   },
 });

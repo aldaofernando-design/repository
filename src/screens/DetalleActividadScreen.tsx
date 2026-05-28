@@ -7559,7 +7559,7 @@ const styles = StyleSheet.create({
     right: 0,
     paddingHorizontal: 12,
     paddingVertical: 8,
-    backgroundColor: 'rgba(0,0,0,0.4)',
+    backgroundColor: 'transparent',
   },
   watermarkRow: {
     flexDirection: 'row',

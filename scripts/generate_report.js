@@ -252,6 +252,23 @@ async function run() {
                     } else {
                       val = '';
                     }
+                  } else if (
+                    pathStr.includes('ampereEmpalme') ||
+                    pathStr.includes('ampereDisplayRectificador') ||
+                    pathStr.includes('ampereConsumoFinalCaEvidencia') ||
+                    pathStr.includes('ampereDisplayRectificadorFinal')
+                  ) {
+                    if (val !== undefined && val !== null && val !== '') {
+                      const cleanVal = String(val).replace(',', '.');
+                      const parsed = parseFloat(cleanVal);
+                      if (!isNaN(parsed)) {
+                        val = Math.round(parsed).toString();
+                      } else {
+                        val = String(val);
+                      }
+                    } else {
+                      val = '';
+                    }
                   } else {
                     if (val === true) val = 'SI';
                     else if (val === false) val = 'NO';

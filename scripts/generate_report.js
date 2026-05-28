@@ -225,9 +225,38 @@ async function run() {
                   const pathStr = match.slice(2, -2).trim();
                   let val = getValueByPath(data, pathStr);
                   
-                  if (val === true) val = 'SI';
-                  else if (val === false) val = 'NO';
-                  else if (val === undefined || val === null) val = '';
+                  if (pathStr.includes('seApagaraAntenaS')) {
+                    if (val === true || val === 'Si') {
+                      val = 'Se Apaga';
+                    } else {
+                      val = 'N/A';
+                    }
+                  } else if (pathStr.includes('confirmadoApagadoRetirar')) {
+                    if (val === true || val === 'Si') {
+                      val = 'Se Apaga';
+                    } else {
+                      val = 'N/A';
+                    }
+                  } else if (pathStr.endsWith('tecnologiaAlarmas')) {
+                    if (val === '3G' || val === 'BAFI') {
+                      val = 'Migrada';
+                    } else if (val === 'LTE' || val === '5G') {
+                      val = 'Ya migrado';
+                    } else if (val === 'No existen') {
+                      const implementaran = getValueByPath(data, 'plannings.details_json.alarmasExternas.implementaranAlarmas');
+                      if (implementaran === true || implementaran === 'Si') {
+                        val = 'Se implementan';
+                      } else {
+                        val = 'No existen';
+                      }
+                    } else {
+                      val = '';
+                    }
+                  } else {
+                    if (val === true) val = 'SI';
+                    else if (val === false) val = 'NO';
+                    else if (val === undefined || val === null) val = '';
+                  }
                   
                   cellStr = cellStr.replace(match, val);
                 }
